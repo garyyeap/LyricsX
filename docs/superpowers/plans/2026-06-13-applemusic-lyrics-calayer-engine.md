@@ -150,7 +150,7 @@
   - **分组规则是对我们数据格式的适配，不是从 AM 抄的**——AM 不需要它，因为它的 TTML 天生就是词级。Music 的常数与公式一个未动。
   - **探针**：新增 `emphasisRipplesAcrossNeighboursInsteadOfFreezingEachGlyph`，逐帧采样每个字形 presentation 层的位置，断言两件事：①任一时刻至少 3 个字形同时在动（防"逐字轮流"回归）②没有字形在离开静止位后**真正停住**超过 0.15s（防"顶上冻结"回归）。"停住"用比"在动"严一个数量级的阈值（0.01pt/帧 vs 0.05），因为弹簧换向时速度必然过零、但不会真停——这一点最初写松了导致探针在 0.25s 边界抖动。**已反向验证**：把代码改回旧调度，两条断言都如实失败（同时在动 2 个、冻结 0.35s）。
   - `LineEmphasisProbes` 整体改为 `@Suite(.serialized)`：两条探针都跑真实墙钟时间线、回落批次经主队列 `asyncAfter`，并行时会在彼此的 `await` 点交错，互相污染测量。
-- 🔬 **行切换滚动：弹簧常数确认无误，真正的差距是「每帧都动」（2026-07-26 深夜）**。用户反馈行间「没有任何动画效果，就是线性的上移，看不到弹跳」。
+- ✅ **行切换滚动：交给 Core Animation 驱动（2026-07-26 深夜）**。用户反馈行间「没有任何动画效果，就是线性的上移，看不到弹跳」。
   - **一次自摆乌龙，值得记下来**。先用用户给的 CleanShot 录屏拟合，得出 ωₙ≈15、峰值 570 pt/s，据此把 `scrollSpringNaturalFrequency` 从 10 改到 13.3。**这是错的**：那份录屏是 30fps，而运动是 60Hz 的，30Hz 采样把相邻两帧合成一帧、**把每帧步长翻了一倍**，拟合自然偏快。教训：**给运动曲线拟合参数之前，先确认采样率不低于显示刷新率。**
   - **改用 60fps 单独录制 Music 后的真值**：连续三次单行推进，各走 80~90pt，**由 27~28 步在 450ms 内送达**（即 Music 每一个显示帧都在动），步长依次 `1 3 4 5 5 6 6` 上升、`5 5 4 4 3 3 2 2 1 1 1` 衰减。6pt/帧 @60Hz = 360 pt/s，而 ζ=0.9 的弹簧峰值速度为 `travel · ωₙ · 0.395`，反解 ωₙ = 10.1。**与 dump 出的 mass 1 / stiffness 100 / damping 18 完全一致**，故已改回 10 并在注释里记下这次教训。
   - **所以差距不在曲线，在送达密度**：Music 的 450ms 里有 28 个中间位置，起步的 `1 3 4 5` 和收尾的 `2 1 1 1` 正是"弹"的观感来源；若同样的曲线只送达三五个位置，缓动两端全部丢失，看起来就只剩匀速平移。
@@ -158,6 +158,11 @@
   - **顺带澄清**：AM 的行切换**没有位置过冲**（ζ=0.9 的过冲仅 0.15%，不可见）。"弹跳感"来自起步的缓入与收尾的长衰减，不是回弹，所以不要为了"更弹"去降阻尼比。
   - **积分器本身无误**：把 `stepScrollSpring()` 的闭式解原样重跑，得到的是标准弹簧曲线，与理论一致。
   - **顺手去掉一处每次切换的空转**：`updateDistances` 会给**每一行**调 `animateAlpha`，而距离衰减改平后非当前行目标值全相同，绝大多数是空动画——几十个 `CABasicAnimation` 恰好压在滚动弹簧起步的那一帧上。已加相等判断跳过。
+  - **最终改法：不再自己逐帧推进，改挂真正的 `CASpringAnimation`**（`stepScrollSpring()` 及其全部状态已删除，display link 回调不再碰滚动）。这样送达密度天然等于刷新率，与主线程忙不忙无关——正是 AM 的机制（`LayerPropertyAnimator` / `sub_100162B3C` 弹 `contentView.bounds` / `sub_10015AF20`）。
+  - **关键约束（来自 `appkit-layer-backing`）**：`bounds` 属于 AppKit **无 guard 强制从视图 ivar 回写图层**的几何属性之一（`_updateLayerGeometryFromView`，`setFrameSize:` 里直接调用），所以**不能把 clip 图层的 bounds 当作独立状态去animate**。正确切分是：**模型值先写到终点**（AppKit 保持权威，hit testing / `documentVisibleRect` / 下一次目标计算全读它），**显式动画只作为视觉叠在上面**。显式 `add(_:forKey:)` 的动画不会被"设置模型值"这个动作移除，因此后续的几何同步只要写的是同一个终点就无害。
+  - **两个实现细节**：①新弹簧的 `fromValue` 取 **presentation 层**的当前位置而非模型值，否则连续换行时会先跳回再走；②`anchorClip` 保留"目标未变则不重启"的判断——间奏期间它每帧都被调用，每帧重启弹簧会让它永远走不出起步段。
+  - **被这次改动抓出的一个真 bug**：`scrollView.contentView`（`NSClipView`）**默认没有图层**，`springClip` 会静默退化成瞬间跳转。已在 `setupScrollView()` 显式 `wantsLayer = true`。这一条是写探针时发现的——不写探针根本不会暴露。
+  - **探针**：新增 `ScrollSpringProbes`（离屏窗口 + 合成歌词，不依赖录屏）。断言的是**机制**而非帧数（帧数不确定，机制是确定的）：①行切换后 clip 图层上确实挂着一个 keyPath 为 `bounds.origin.y` 的 `CASpringAnimation`，且 mass/stiffness/damping 恰为 Music 的 1/100/18；②模型值已经在终点；③对同一目标重复 re-center 不会重启弹簧。**已反向验证**：去掉 `add(_:forKey:)` 后第一条如实失败。
 - 📋 **剩余（均为净负价值或越界，故未做）**：
   - **CAGradientLayer mask 零重绘**：会替换已通过三轮评审的 two-pass draw（回归风险），且涉及 flipped-layer 坐标；two-pass 仅重绘单行、性能已足，故不为优化而冒险。
   - **精确 Apple 常量**：specs 从 Music 侧注入，且 Apple 的 spec 模型（selectedLinePosition/contentInsets/lineSpacing/paragraphSpacing/emphasizingScaleRange 分立 + 逐字动态缩放）与本简化架构映射不佳，原始数值套用价值低；当前经验值最适合视觉微调。

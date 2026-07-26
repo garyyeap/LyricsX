@@ -43,6 +43,11 @@ APPLE_MUSIC_LYRICS_PROBE_FRAME_DIRECTORY=/tmp/probe-frames swift test --filter L
 # points it elsewhere, APPLE_MUSIC_LYRICS_FIXTURE_SWEEP_LIMIT (default 40)
 # widens the sweep to the whole library.
 swift test --filter LyricsLibraryFixtureProbes
+
+# The line-change scroll: asserts the clip travels on a real CASpringAnimation
+# with Music's own mass/stiffness/damping, rather than being stepped by hand
+# from the display link. Offscreen and synthetic — no recording, no player.
+swift test --filter ScrollSpringProbes
 ```
 
 `LyricsXWidgetShared`'s `WidgetDataStoreTests` has a pre-existing parallel-execution race (two tests share one store file), so a bare `swift test` may show its failures — they are unrelated to the panel probes.

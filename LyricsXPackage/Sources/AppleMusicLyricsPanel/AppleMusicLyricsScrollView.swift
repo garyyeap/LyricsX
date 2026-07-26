@@ -32,11 +32,6 @@ extension AppleMusicLyrics {
         private var signature: LayoutSignature?
         private var lastLaidOutSize: CGSize = .zero
         private var displayLink: DisplayLink?
-        // Timestamp of the current display-link frame, updated by
-        // `synchronization(context:)`. MSDisplayLink does not expose a
-        // `timestamp` property on the link itself, so we mirror CADisplayLink's
-        // semantics by stashing the per-frame value here.
-        private var currentFrameTimestamp: TimeInterval = 0
         private var preferenceObservers: Set<AnyCancellable> = []
         /// The lyrics display time resolved once per display-link frame; drives the
         /// karaoke fill and the intro/interlude indicators together.
@@ -50,14 +45,23 @@ extension AppleMusicLyrics {
         // (`sub_10015AF20`) sets `contentView.bounds`. There is NO per-line position
         // cascade — that earlier reading was wrong, and the jump-clip-then-displace
         // implementation it produced leaked the literal clip jump as the
-        // "直接运动" (teleport) the user reported. We reproduce the real mechanism
-        // by stepping the clip origin toward its target every display-link frame
-        // with the EXACT line-change spring, restarting from the current position
-        // with zero velocity on each new target (matching AM's
-        // `fromValue = presentationLayer`, default `initialVelocity = 0`).
-        private var scrollTargetY: CGFloat?
-        private var scrollVelocity: CGFloat = 0
-        private var lastScrollTickTimestamp: CFTimeInterval = 0
+        // "直接运动" (teleport) the user reported.
+        //
+        // The spring is handed to Core Animation rather than stepped by hand from
+        // the display link. Music's smoothness is not in the curve — it is in how
+        // often the curve is sampled: measured at 60 Hz, one 90 pt advance arrives
+        // as 28 separate positions over 450 ms, i.e. Music moves the clip on every
+        // display frame, and the `1 3 4 5` at the start and `2 1 1 1` at the end
+        // are exactly what reads as a spring. Stepping the same curve by hand ties
+        // its smoothness to how busy the main thread is, and this panel's main
+        // thread is busy: per-frame karaoke, per-frame interlude checks, an
+        // animated gradient background. Once the animation is attached, the render
+        // server interpolates it whatever the app is doing.
+        /// Target of the in-flight clip spring, so re-centring on a target we are
+        /// already travelling to (the interlude hold does this every frame) does
+        /// not restart the animation from a standstill.
+        private var clipSpringTargetY: CGFloat?
+        private static let clipSpringAnimationKey = "AppleMusicLyrics.clipSpring"
         // `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
         // mass 1, stiffness 100, damping 18 → ωₙ = √(100/1) = 10, ζ = 18/(2·√100) = 0.9.
         //
@@ -141,6 +145,11 @@ extension AppleMusicLyrics {
             scrollView.hasHorizontalScroller = false
             scrollView.autohidesScrollers = true
             scrollView.contentView.drawsBackground = false
+            // The line-change spring is attached to this layer, so ask for it up
+            // front rather than relying on layer backing to reach the clip on its
+            // own — until it exists there is nothing to animate and every line
+            // change silently falls back to a jump.
+            scrollView.contentView.wantsLayer = true
             scrollView.documentView = documentView
             addSubview(scrollView)
         }
@@ -434,24 +443,13 @@ extension AppleMusicLyrics {
         private func anchorClip(toCenterY centerY: CGFloat, animated: Bool) {
             let targetY = clampedClipY(forCenterY: centerY)
 
-            // A spring needs the display link to step it; if we're off-window it
-            // is not running, so jump directly.
+            // Off-window there is no render server driving anything, so jump.
             if animated, window != nil {
-                // New target → restart the spring from the current position with
-                // zero velocity, exactly as Apple Music's CASpringAnimation does
-                // (fromValue = presentation, default initialVelocity 0). Re-centering
-                // to the same target (e.g. during an interlude hold, called every
-                // frame) is a no-op so the spring is not perpetually reset.
-                if scrollTargetY == nil || abs(scrollTargetY! - targetY) > 0.5 {
-                    scrollTargetY = targetY
-                    scrollVelocity = 0
-                }
+                guard clipSpringTargetY.map({ abs($0 - targetY) > 0.5 }) ?? true else { return }
+                clipSpringTargetY = targetY
+                springClip(to: targetY)
             } else {
-                scrollTargetY = nil
-                scrollVelocity = 0
-                // Reset so a later spring's first frame uses the canonical dt
-                // instead of the gap since this interrupted scroll.
-                lastScrollTickTimestamp = 0
+                cancelClipSpring()
                 setClipOrigin(targetY)
             }
         }
@@ -470,65 +468,58 @@ extension AppleMusicLyrics {
 
         // MARK: Auto-follow scroll spring
 
-        /// Step the clip origin toward `scrollTargetY` one display-link frame with
-        /// Apple Music's exact line-change spring (mass 1, stiffness 100, damping 18
-        /// → damping ratio ζ = 0.9, settling ~0.6s). This springs the
-        /// `scrollView.contentView` bounds, so the whole line stack moves together —
-        /// precisely how Apple Music animates a line change: its `LayerPropertyAnimator`
-        /// (`sub_100162B3C`) attaches a `CASpringAnimation` with these parameters to a
-        /// layer whose model value (`sub_10015AF20`) is `contentView.bounds`. The
-        /// integration is the closed-form underdamped solution, so the curve matches a
-        /// real CASpringAnimation exactly and is unconditionally stable for any Δt.
-        private func stepScrollSpring() {
-            guard let targetY = scrollTargetY else { return }
-
-            let timestamp = currentFrameTimestamp != 0 ? currentFrameTimestamp : lastScrollTickTimestamp
-            var deltaTime = lastScrollTickTimestamp == 0 ? (1.0 / 60.0) : (timestamp - lastScrollTickTimestamp)
-            lastScrollTickTimestamp = timestamp
-            deltaTime = min(max(deltaTime, 1.0 / 240.0), 1.0 / 30.0)
-            let step = CGFloat(deltaTime)
-
-            let naturalFrequency = scrollSpringNaturalFrequency
-            let dampingRatio = scrollSpringDampingRatio
-            let dampedFrequency = naturalFrequency * sqrt(1 - dampingRatio * dampingRatio) // ω_d
-            let decayRate = dampingRatio * naturalFrequency // σ = ζ·ωₙ
-
-            let currentY = scrollView.contentView.bounds.origin.y
-            let displacement = currentY - targetY // y₀ (distance still to travel)
-            let velocity = scrollVelocity // v₀
-            let decay = CGFloat(exp(Double(-decayRate * step)))
-            let cosine = CGFloat(cos(Double(dampedFrequency * step)))
-            let sine = CGFloat(sin(Double(dampedFrequency * step)))
-
-            // Exact underdamped step:
-            //   y(t) = e^{-σt}·[ y₀·cos(ω_d t) + ((v₀ + σ·y₀)/ω_d)·sin(ω_d t) ]
-            //   v(t) = e^{-σt}·[ v₀·cos(ω_d t) − ((σ·v₀ + ωₙ²·y₀)/ω_d)·sin(ω_d t) ]
-            let nextDisplacement = decay * (
-                displacement * cosine
-                    + (velocity + decayRate * displacement) / dampedFrequency * sine
-            )
-            let nextVelocity = decay * (
-                velocity * cosine
-                    - (decayRate * velocity + naturalFrequency * naturalFrequency * displacement) / dampedFrequency * sine
-            )
-
-            if abs(nextDisplacement) < 0.5, abs(nextVelocity) < 1.0 {
-                scrollTargetY = nil
-                scrollVelocity = 0
-                lastScrollTickTimestamp = 0
+        /// Travel to `targetY` on Apple Music's line-change spring, with Core
+        /// Animation doing the interpolating.
+        ///
+        /// The clip's bounds belong to AppKit — it re-projects them onto the layer
+        /// from the view's own ivars on any geometry pass, with no guard flag to
+        /// opt out of — so the model value is written first and stays authoritative
+        /// for hit testing, `documentVisibleRect` and the next target. The explicit
+        /// animation then rides on top of that model value purely as a visual, the
+        /// same split Music's `LayerPropertyAnimator` (`sub_100162B3C`) uses when
+        /// it springs `contentView.bounds` (`sub_10015AF20`).
+        private func springClip(to targetY: CGFloat) {
+            guard let clipLayer = scrollView.contentView.layer else {
                 setClipOrigin(targetY)
-            } else {
-                scrollVelocity = nextVelocity
-                setClipOrigin(targetY + nextDisplacement)
+                return
             }
+            // Where the eye last saw the content, not where the model says it is:
+            // a line change that interrupts one still in flight has to continue
+            // from the visible position or it jumps back to pick up the new curve.
+            let visibleY = (clipLayer.presentation() ?? clipLayer).bounds.origin.y
+            setClipOrigin(targetY)
+            guard abs(visibleY - targetY) > 0.5 else {
+                clipLayer.removeAnimation(forKey: Self.clipSpringAnimationKey)
+                return
+            }
+
+            let timing = SpringTimingParameters(
+                dampingRatio: scrollSpringDampingRatio,
+                period: 2 * .pi / TimeInterval(scrollSpringNaturalFrequency)
+            )
+            let animation = timing.makeAnimation(keyPath: "bounds.origin.y")
+            animation.fromValue = visibleY
+            animation.toValue = targetY
+            animation.isRemovedOnCompletion = true
+            animation.preferredFrameRateRange = LyricsSpecs.preferredFrameRateRange
+            clipLayer.add(animation, forKey: Self.clipSpringAnimationKey)
+        }
+
+        /// Drop an in-flight clip spring, leaving the content where it currently
+        /// looks like it is rather than where the spring was headed.
+        private func cancelClipSpring() {
+            clipSpringTargetY = nil
+            guard let clipLayer = scrollView.contentView.layer,
+                  clipLayer.animation(forKey: Self.clipSpringAnimationKey) != nil else { return }
+            let visibleY = (clipLayer.presentation() ?? clipLayer).bounds.origin.y
+            clipLayer.removeAnimation(forKey: Self.clipSpringAnimationKey)
+            setClipOrigin(visibleY)
         }
 
         @objc private func userWillScroll() {
             // The user took over — abandon the in-flight auto-scroll spring so it
             // does not keep moving content under the drag.
-            scrollTargetY = nil
-            scrollVelocity = 0
-            lastScrollTickTimestamp = 0
+            cancelClipSpring()
             interactionState?.userDidScroll()
         }
 
@@ -556,7 +547,9 @@ extension AppleMusicLyrics {
             resolvedPlaybackTime = selectedPlayer.playbackState.lyricsDisplayTime(
                 trackDuration: selectedPlayer.currentTrack?.duration
             )
-            stepScrollSpring()
+            // Nothing here touches the scroll: the clip travels on a real
+            // `CASpringAnimation`, so it keeps moving at the display's own rate
+            // even when this callback is late.
             updateIntroDotsIfNeeded()
             updateInterludesIfNeeded()
 
@@ -672,7 +665,6 @@ extension AppleMusicLyrics {
 
 extension AppleMusicLyrics.SyncedLyricsContainerView: DisplayLinkDelegate {
     func synchronization(context: DisplayLinkCallbackContext) {
-        currentFrameTimestamp = context.timestamp
         handleDisplayLink()
     }
 }
