@@ -1,7 +1,7 @@
 import AppKit
 import UIFoundation
 
-// Pure-AppKit chrome controls for the lyrics panel (playback scrubber + buttons).
+/// Pure-AppKit chrome controls for the lyrics panel (playback scrubber + buttons).
 extension AppleMusicLyrics {
     /// An `NSImageView` with a fixed corner radius. Mirrors `UIFoundation.ImageView`:
     /// an image-bearing `NSImageView` does not take the `updateLayer` fast path,
@@ -158,10 +158,10 @@ extension AppleMusicLyrics {
         private let pointSize: CGFloat
         private let iconView = NSImageView()
         private let hoverBackground = LayerBackedView()
-        // The hit area / hover square extends this far beyond the glyph on every
-        // side, so the rounded background reads as a frame around the icon instead
-        // of being clipped flush to the glyph (which made the hover invisible).
-        // The glyph itself stays at its natural size, centred.
+        /// The hit area / hover square extends this far beyond the glyph on every
+        /// side, so the rounded background reads as a frame around the icon instead
+        /// of being clipped flush to the glyph (which made the hover invisible).
+        /// The glyph itself stays at its natural size, centred.
         private let hoverPadding: CGFloat = 10
         // Rounded-square (NOT circular) hover fill.
         private let hoverCornerRadius: CGFloat = 8

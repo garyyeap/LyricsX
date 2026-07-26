@@ -2,6 +2,7 @@ import AppKit
 import LyricsXFoundation
 
 // MARK: - Word Timing Data
+
 extension AppleMusicLyrics {
     struct WordTimingEntry {
         var characterIndex: Int
@@ -24,6 +25,28 @@ extension AppleMusicLyrics {
     /// performance win over the SwiftUI `TextRenderer` implementation.
     enum KaraokeFill {
         static func fraction(
+            elapsedTime: TimeInterval,
+            lineDuration: TimeInterval,
+            wordTimings: [WordTimingEntry],
+            totalCharacterCount: Int,
+            mode: KaraokeMode
+        ) -> CGFloat {
+            // Real libraries contain lines whose time tags index past the
+            // line's own character count (mismatched or truncated tags), which
+            // would push the raw ratio above 1 — the library sweep probe
+            // caught one at 2.18. Clamp here so the documented `0...1`
+            // contract holds regardless of the data.
+            let raw = unclampedFraction(
+                elapsedTime: elapsedTime,
+                lineDuration: lineDuration,
+                wordTimings: wordTimings,
+                totalCharacterCount: totalCharacterCount,
+                mode: mode
+            )
+            return min(1, max(0, raw))
+        }
+
+        private static func unclampedFraction(
             elapsedTime: TimeInterval,
             lineDuration: TimeInterval,
             wordTimings: [WordTimingEntry],
@@ -72,6 +95,7 @@ extension AppleMusicLyrics {
 }
 
 // MARK: - Helper to Extract Word Timings from LyricsKit InlineTimeTag
+
 extension LyricsLine {
     var wordTimingEntries: [AppleMusicLyrics.WordTimingEntry]? {
         guard let timetag = attachments.timetag else { return nil }

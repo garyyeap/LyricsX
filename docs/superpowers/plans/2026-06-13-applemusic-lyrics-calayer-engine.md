@@ -34,12 +34,133 @@
 - ✅ **Phase 4 (间奏 dots — 曲中)**：词时歌词中按 `timetagDuration` 检测「行尾→下一行」间隙 > 5s，插入**持久行间 dots 槽位**（`interludeSegments`，与行视图交织布局）；间奏期间居中并按进度填充。纯增量：无间隙时与之前完全一致。
 - ✅ **Phase 5 (背景氛围漂移)**：`BackgroundView` 给已模糊封面叠加 18s 缓慢 `scaleEffect`/`offset` 漂移（GPU transform 小位图，不触发重新模糊/CoreImage，符合原性能约束），逼近 Apple "活的"背景。
 - 🔬 **IDA 验证（2026-06-14）**：反编译 `SyncedLyricsViewController.viewDidLoad`（`sub_100157B08`）确认 Apple 架构与本实现高度一致——layer-backed `NSScrollView`+flipped documentView、`drawsBackground=false`、`hasVerticalScroller`、`automaticallyAdjustsContentInsets=false`、观察 `WillStartLiveScroll`/`DidEndLiveScroll`、每行 `setRasterizationScale(backingScaleFactor)`、每个 line layer 持 `specs`。**规格常量**（含 `emphasizingScaleRange` 等）是从 Music 侧 `LyricsXViewController` 作为 `_specs`/`_unresolvedSpecs` ivar 注入的，字面值需再上溯一层（深 + ROI 低，且架构有别）；当前用经验值（1.05/28/24/0.4/spring0.6·0.275），最适合配合视觉对比微调。
-- ⏳ **待运行时视觉验证**（需正在播放且有歌词的 Apple Music；菜单栏 app，面板需手动开启）：文字方向/位置、当前行高亮+缩放+居中、词级扫光、弹簧滚动手感、点按跳转。
+- 🔬 **IDA 验证（2026-07-26，修正上一条的部分判断）**：上一条说「原始数值套用价值低」只对了一半——**具体数值**确实拿不到（`_specs` 是运行时注入），但**动画的数学结构是编译期常量，完全可取**，而且正是逐字弹跳的关键：
+  - `sub_1001662D4` 不硬编码 spring 系数，而是从**周期**反推：`mass = 1`、`stiffness = (2π/T)²`、`damping = ζ · 2·√(stiffness · mass)`；逐字动画的调用点（`sub_10018B2B4`）传 `ζ = 1`（临界阻尼，不过冲）、`T = min(lineDuration, 3)`。
+  - 同一处按 `min(lineDuration / glyphCount × 0.4, 0.4)` 给每个字**错峰延迟**（第 i 字 × (i+1)）——弹跳观感来自错峰，不来自单字回弹。
+  - 每字同时动 scale（`emphasizingScaleRange`，specs +0x100）和上抬（`syllableLift`，specs +0x2D0），载体是 `SyncedLyricsLineLayer.Glyph.GlyphLayer` + `LayerPropertyAnimator`。
+  - 动画均设 `preferredFrameRateRange(min: 80, max: 120, preferred: 120)`、`fillMode = .both`、`removedOnCompletion = true`。
+  - 仍未取到：`emphasizingScaleRange` / `syllableLift` 的字面值（需 lldb 挂 Music dump `_specs`）。
+- 🔬 **lldb 实机 dump（2026-07-26）**：SIP 已关，直接 attach 运行中的 Music（`lldb -p`），在 glyph 动画构造函数 `sub_10018B2B4` 下断点（X0 即 `*LyricsSpecs`），读出完整 880 字节。**运行中的二进制与 `/Volumes/RE/AppleMusic/26.5.1` 的 dump UUID 逐位相同**（`CF9B3665-3252-37B8-B25D-9384D448824F`，arm64e，Music 1.6.5），所以静态偏移表可直接套用。脚本见 scratchpad `dump_specs.py`。取到的真值：
+
+  | 字段 | 偏移 | 真值 |
+  |---|---|---|
+  | `emphasizingScaleRange` | +0x100 | **1.0 … 1.14** |
+  | `syllableLift` | +0x2D0 | **3** |
+  | `animationHeadstart` | +0x220 | **0.1** |
+  | `lineDelay` | +0x0B8 | 0.05 |
+  | `lineChangeSpringTimingParameters` | +0x2F8 | mass 1 / stiffness 100 / damping 18（ζ=0.9, ωₙ=10） |
+  | `lineProgressionGradientFeather` | +0x250 | 30 |
+  | `lineFinishProgressAnimationDuration` | +0x2E8 | 0.25 |
+  | `lineTapProgressFreezeDuration` | +0x2E0 | 0.1 |
+  | `maxSelectedLines` | +0x0C8 | 2 |
+  | `lineSpacing` / `paragraphSpacing` | +0x078 / +0x050 | 50 / 39 |
+  | `deselectedTransform` | +0x1F0 | identity（再次确认非活动行不缩放） |
+  | `glowRadius` / `glowRange` | +0x238 / +0x240 | 5 / 0 … 0.4 |
+  | `touchDownTransform` | +0x258 | 0.95 等比缩放 |
+  | `backgroundVocalsDeselectedTransform` | +0x088 | 0.9 等比缩放 |
+  | `lineBlurEnabled` / `hidePreviousLines` | +0x2F1 / +0x2F2 | true / false |
+  | `vocalGroupWidthCoefficient` | +0x2D8 | 0.85 |
+  | `maxEndTimeOffset` | +0x0C0 | 0.5 |
+
+  `lineChangeSpringTimingParameters` 与此前静态挖出的值完全一致，交叉验证通过。
+- ⚠️ **per-line 位置错峰：第二次被证伪（2026-07-26）**。dump 里 `lineDelay = 0.05` 的存在一度让人以为「行位置应该逐行错峰」，据此实现过一版后**已回退**。反证：
+  - `sub_10015AF20`（`LayerPropertyAnimator` 的 action）反编译后只有一件事——`scrollView.contentView.setBounds:`。AM 是**整体移动 clip**，文档里的行是静态的。
+  - `lineDelay` 的 getter/setter（`sub_1001CF390`/`sub_1001CF398`）**没有任何 xref**（被内联），没有任何证据表明它作用在行的位置上；更可能与 `maxSelectedLines = 2`（同时可有两行选中）配套，用于行级动画的起始错峰。
+  - 2026-06-16 那条注释早就记录过同样的结论，且当时的 per-line cascade 实现正是用户报的「直接运动」的来源。
+  **结论：行的平滑只能来自 clip spring，不要再往行位置上加错峰。**「行间跳动」若仍存在，应去查 clip spring 为何没生效（`animated` 是否被传 false、`scrollJumpThreshold = 5` 是否被误触发、display link 是否在跑），而不是加 cascade。
+- ✅ **逐字弹跳（2026-07-26）**：在上一条的基础上实现。此前高亮行只有线性的「暗→亮」裁剪填充，字本身没有任何几何变化，所以没有 AM 的弹跳感。
+  - **不建 layer**：AM 每字一个 `GlyphLayer` 各挂一条 `CASpringAnimation`；我们改为 **CPU 解析求解**同一条 spring，把结果折进已有的单次 `draw(_:)`，图层树保持扁平。临界阻尼（ζ=1）有闭式解 `1 − (1 + ωₙt)·e^(−ωₙt)`，所以每字进度是 elapsed 的纯函数——不逐帧积分、不漂移、任何帧间隔都稳定，seek/卡顿后也不会错位。
+  - **触发时刻**：有逐字时间（timetag）就按该字自己的起唱时刻，比固定错峰更贴合人声；无 timetag 时退回 AM 原式的 index 错峰。两种情况用同一条 spring 和同一套级联。
+  - **变换**：绕字自身中心缩放（避免放大时侧移）+ 上抬。裁剪在变换**之前**设置，所以填充边缘留在未缩放的视图空间，字可以越过边缘长大而不破坏扫光。
+  - **重绘**：原本只在填充边缘移动 ≥0.5pt 时重绘；补上「还有字没弹稳就继续重绘」，否则暂停的行会卡在弹到一半。两个条件都为假时自动停止重绘。
+  - **落地文件**：新增 `GlyphEmphasisSchedule.swift`（spring + 错峰调度 + 变换）、`GlyphLayout.swift`（Core Text 逐字布局，从 view 里搬出）；`LyricsLineRowView.swift` 只保留调用。搬出后该 view 的 class body 从 341 行降到 309 行，顺带消掉了既有的 `force_cast` / `function_body_length` 违规。
+- ✅ **用实机真值校正 + 羽化边缘（2026-07-26，同日晚）**：上一条初版凭经验值实现，实测「逐字动画不对、字一个个跳」。lldb dump 后定位到三个原因，均已修：
+  1. **弹跳幅度差一倍多**：`scaleUpperBound` 从经验值 1.06 改为真值 **1.14**；`syllableLift` 从 2.5 改为 **3**。
+  2. **「跳动」源于错峰方式选错**：初版按「每个字自己的起唱时刻」触发，而相邻音节可能相隔数百毫秒，于是字一个个单独蹦。已改回 AM 的做法——**按 glyph 索引固定错峰** `min(lineDuration / glyphCount × 0.4, 0.4) × (i+1)`，整行如连续波浪推过。`GlyphLayoutEntry.characterIndex` 随之成为死代码已删除。
+  3. **补上 `animationHeadstart = 0.1`**：动画比歌词时间提前 0.1s 起步，否则整体慢半拍。
+  另外把扫光的**硬边裁剪换成 30pt 羽化**（`lineProgressionGradientFeather`）：不再用 `context.clip` 硬切，而是按字心与填充边缘的距离算 alpha（以边缘为中心、前后各 15pt 过渡），亮层叠在暗层上合成，边界由「刀切」变为渐变。
+- ❌ **CPU 逐帧方案整体废弃，改为照搬 AM 的图层树（2026-07-26，第五轮）**。前四轮都在调参数，用户反复反馈「差距非常巨大，几乎不可用」，最后指示「别试了，照搬 AM 吧」。继续 RE 后确认：**问题不在参数，在架构**——按 AM 的方式重建后，前四轮那些参数根本不需要调。
+  - **AM 的合成关系**（`sub_100169AC8` 建行、`sub_10018C12C` 建词、`sub_10016694C` 建字，`setMask:` 只有这两处）：
+
+    ```
+    LineLayer                     mask = 字层容器
+    ├─ backgroundColorLayer       未唱底色，铺满整行
+    ├─ LineProgressGradientLayer  已唱亮色 + 羽化带
+    └─ mask = 容器
+         └─ WordColorLayer × 词    mask = WordLayer
+              └─ WordLayer        shouldRasterize；shadow 即微光
+                   └─ GlyphLayer × 字
+    ```
+
+    **颜色和扫光在遮罩外，字的几何在遮罩内。** 这是关键：字缩放时颜色自动跟随，同时扫光边界始终像素连续。单趟 `draw(_:)` 无法把两者分开，所以之前无论怎么调都做不出来。
+  - **字层是什么**：`SyncedLyricsLineLayer.Glyph.GlyphLayer` 继承 MusicUtilities 的 `CTRun.PartialRunLayer`，存 `run` + `range` + `textPosition`，`drawInContext:` 只做三件事——填充色设**纯白**、设 text matrix、`CTRunDraw` 画自己那一段。`contentsFormat = .gray8Uint`。纯白+灰度 = 它是**遮罩**，不是文字本身。
+  - **动画驱动**：`LayerPropertyAnimator` 收集图层属性改动 → diff 新旧值 → 每个变化的属性发一条 `CASpringAnimation`，`beginTime` 承担错峰、`fillMode = .both`、`preferredFrameRateRange(80,120,120)`。**发完就没有 CPU 参与**，逐字插值全在渲染进程。
+  - **弹跳以词为单位**（`sub_10018B2B4`，由 `sub_1001689D4` 每词调一次）。设词内 N 字、词时长 D：逐字延迟 `min(D/N × 0.4, 0.4) × (i+1)`；弹簧 `ζ=1`、`T = min(D, 3)`；目标是 `frame.origin` 挪位 + `affineTransform = scale(s,s)`；再过 `2D/N` 发第二条回到 identity。同时**词图层动 `shadowOpacity`**（`glowRange = 0…0.4`、`shadowRadius = glowRadius = 5`）——唱到的词那圈微光，之前完全没做。
+  - **位移公式**：AM **不做逐字宽度累加**。`x = (原x + W(1−s)/2 + s·原x) / 2` 展开正好等于「整个词按 `k = (1+s)/2` 绕词心缩放」。字按 s 缩放、词按 k 铺开，s > k，所以字之间会轻微互相靠拢——那个「挤一下」正是 AM 的观感。第四轮加的累加补偿把它抹平了，方向就是反的。
+  - **落地文件**：新增 `AppleMusicLyricsSpecs.swift`（常量集中）、`SpringTimingParameters.swift`（按周期反推 spring）、`LayerPropertyAnimator.swift`、`GlyphRunLayer.swift`、`LineProgressGradientLayer.swift`、`LineTextLayout.swift`（Core Text → 词 → 字）、`SyncedLyricsLineContentLayer.swift`（层树 + 调度）。删除 `GlyphEmphasisSchedule.swift`、`GlyphLayout.swift`、`LineProgressGradient.swift`。`LyricsLineRowView` 不再画正文，只画翻译。
+  - **有意偏离 AM 的四处**（都已在代码注释里写明理由）：
+    1. **扫光层宽度固定、只动 position**。AM 会同时改它的 `bounds`，但子层是按 model bounds 布局的，动画中 presentation 会把羽化带裁掉；固定宽度后羽化在每一插值帧都在正确位置。
+    2. **回弹用真定时器，不是第二条 `beginTime` 动画**。同一 key path 上两条延迟动画，后加的那条会以 backwards fill 覆盖前一条的整个运行区间，字会被钉在原位。
+    3. **回弹目标取排版原位**，而非 AM 的「原位 − syllableLift」。照抄会让已唱的词永久停在高 3pt 的位置，整行出现台阶。
+    4. **微光挂在字层，不是词层**。AM 挂在词层，但词层自己没有内容、只有子层——这种图层的阴影按**边界矩形**算，塞进遮罩里就是一个亮方块。AM 靠同时开 `shouldRasterize` 把子层压平成位图才拿到字形阴影；我们改挂到有真实绘制内容的字层上，阴影天然贴着字形轮廓，不用光栅化，也没有子层动画反复重栅格化的开销。
+  - **`t`（缩放/微光的插值系数）仍未取到**：AM 存在 Word 对象里（`Word+56`），静态查不到来源。已挂钩 `sub_10018B2B4` 采样，但需要 Music **歌词面板可见**才会命中（六个钩子零命中即证明面板未开）。当前按满值 `t = 1` 实现（即 `s = 1.14`、微光 0.4），是 AM 的上限而非中间态。
+- ✅ **强调被裁剪 / 弹跳幅度失控（2026-07-26 修复）**。用户实测「非常生硬的弹跳，而且弹跳幅度非常大」，实为两个几何缺陷叠加，均已定位到确切数字：
+  - **`emphasizedOrigin` 纵向漏加词框留白偏移**。横向加了、纵向没加，字形静止时在词框里的 y 是 15.52，强调那一刻直接跳到 −6.78——不是抬 3pt，是往上蹿 22pt。
+  - **整行图层的 `bounds` 恰好等于排版出的文字块**，而这一层的遮罩就是字层树，遮罩画不出被遮罩图层之外。强调加出来的一切（上抬、放大、微光）全在框外被齐平切掉；即便修好上一条，每个强调字的顶部仍会少约 6.8pt、首字左边少 3.6pt。所谓「生硬」其实是字被裁没了又冒出来。
+  - 顺带修掉一处**位置漂移**：原来用 `layer.frame.origin = …` 挪字形，而回弹那趟执行时缩放还挂着——`frame` 是按变换后的外接框算的，一个「放大—回落」循环实测偏 7%，且不会自校正。改为直接设 `position`。
+  - **修法**：`textOutset` 让整行图层比文字块四周各外扩一圈（外扩量与单词那圈共用 `emphasisHeadroom` 计算，不会走样），遮罩/底色/各行渐变/词色层统一平移；`LyricsLineRowView` 定位时减掉它，文字落点不变。
+  - **验证手段（可复用）**：把这七个文件连同一个 `AppleMusicLyrics` + `WordTimingEntry` 桩单独编成命令行程序，用 `CARenderer` + Metal 纹理离屏渲染整棵层树（遮罩、阴影、在飞动画都真实合成），按 60fps 出帧再编码成视频。比开 App 等歌词行快得多，本轮两个缺陷都是这么定位并复核的。实测第一个字：纵向位移 20px → 7px（设计值 3pt 上抬 + 半个放大量），可见高度从「31px 塌到 15px」变成「31…41px、再不低于静止高度」。
+- ⏳ **待运行时视觉验证**（需正在播放且有歌词的 Apple Music；菜单栏 app，面板需手动开启）：当前行高亮、词级扫光、弹簧滚动手感、点按跳转。文字方向/位置与逐字弹跳已由上述离屏渲染验证。
+- ✅ **非当前行的模糊（2026-07-26 补齐）**。
+  - **AM 的做法**（`SyncedLyricsLineLayer`，`sub_10019EEDC` 建立、`sub_10019EBAC` 改半径）：行图层**常驻**两个 `CAFilter`——`gaussianBlur` 和 `colorBrightness`——切换焦点时只动数值，走 `setValue:forKeyPath:` 的 `filters.gaussianBlur.inputRadius`。**选中行在函数入口就 early return**，永远不模糊。
+  - **不是按距离分级，是开关**。二进制里只有两个字面量：取消选中写 3.0（`sub_1001E9420`）、选中写 0.0（`sub_1001E2608`），`sub_1001E3148` 统一 clamp 到 4.0。录屏实测佐证：量每行笔画边缘 20%→80% 的过渡宽度（这个量与亮度无关，不会被「越远越暗」干扰），当前行 1px，其余各行一律 7~8px，距离 1 和距离 4 没有区别。
+  - **有意偏离 AM 的两处**：
+    1. **用公开的 `CIGaussianBlur`，不用私有 `CAFilter`**，配合 `NSView.layerUsesCoreImageFilters`。两者的 `inputRadius` 不是同一个量：直接照抄 3 会糊约 1.7 倍。用同一套边缘宽度指标标定后，AM 的 3 对应 `CIGaussianBlur` 的 1.75~2.0，故取换算系数 `coreImageBlurRadiusScale = 0.625`，把 AM 的原值保留在 specs 里、换算发生在使用点。*（本条偏离已被后续「换回私有 `CAFilter`」取代，见下方 2026-07-26 深夜条目——但其中「两者语义不同」的归因是错的，换算系数本身仍保留。）*
+    2. **没有当前行时不模糊**。AM 的逻辑是「非选中即模糊」，没有「一行都没选中」这个状态；照抄会让前奏期间整面板发糊，看着像坏了。
+  - **动画时长 0.33s** 取自 AM 传给动画器的 timing 负载首字段；该负载的 case 标记（tag 5）没解出来，所以曲线是我们自己的 easeInEaseOut。
+  - **`colorBrightness` 那一路暂未实现**：AM 同时还动一个亮度滤镜，符号是 `kCAFilterColorBrightness` + `kCAFilterInputAmount`，方向由 specs+0x2F4 的一个 bool 决定正负。我们已经用容器 alpha 做了明暗区分，重复叠加会过暗。
+- ✅ **模块抽出为 SPM target + 探针测试落地（2026-07-26）**：整个 `AppleMusicLyrics/` 从 App target 抽为 `LyricsXPackage` 的新 target **`AppleMusicLyricsPanel`**（`git mv` 保留历史），从此 `swift build` / `swift test` 无需 Xcode 工程即可独立构建、探测本引擎。
+  - **App 侧只留一个文件**：`AppleMusicLyricsWindowController`（纯胶水——窗口 frame 记忆、pin 按钮、`isShowLyricsHUD` 生命周期），继续以 `extension AppleMusicLyrics` 挂在包内公开的命名空间上。
+  - **对 App 的全部耦合收敛为一个注入面 `AppleMusicLyrics.HostEnvironment`**：`player`（`MusicPlayerProtocol`，默认 `MusicPlayers.Virtual`，探针零依赖）、双语开关、翻译变换（原 `ChineseConverter.shared`）、`lyricsTimeDelay`（原 `defaults[.globalLyricsOffset]` 路径）、偏好变更信号（原 `defaults.publisher`）。`LyricsPanelViewController` 公开 init 注入 `$currentLyrics` / `$currentLineIndex` 两个 publisher——喂合成 publisher 即可离屏驱动整个面板。包内保留 `selectedPlayer` / `adjustedTimeDelay` 两个同名 internal 别名路由到 HostEnvironment，移动过来的源码零改动照读。
+  - **两个纯扩展下沉 `LyricsXFoundation`** 供 App 与包共用：`PlaybackState.lyricsDisplayTime(trackDuration:)`、`MusicTrack.resolvedArtwork`。`Task.sleep(seconds:)` polyfill 随唯一使用者进包。
+  - **探针**：本会话的 CARenderer 离屏 harness 移植为 `AppleMusicLyricsPanelTests/LineEmphasisProbes`——一条真实时间线跑满一行，断言三件事：①ink 高度永不低于静止值（防 mask 裁剪回归）②最高 ink 行的抬升 ≤ `syllableLift×2+6` 行（防 22pt 过冲回归）③线终了后每个 glyph 位置回到起点 0.5px 内（防 frame-setter 漂移回归）。`APPLE_MUSIC_LYRICS_PROBE_FRAME_DIRECTORY=<dir>` 可逐帧导 PNG。命令：`cd LyricsXPackage && swift test --filter LineEmphasisProbes`（约 8s，全绿）。
+  - **坑（探针姿势）**：swift-testing 的 `@MainActor` 测试体本身就是 main queue 上在跑的 job，用 `RunLoop.run(until:)` 等待时 main queue 不可重入，`asyncAfter` 的词回程批次永远不执行、全部字形停在发力位——等待必须用 `await Task.sleep`（挂起让 main queue 排空）；另外图层树要 `CATransaction.flush()` 才会进 `CARenderer`，否则首帧全空。
+  - 包 target 以 `.swiftLanguageMode(.v5)` 编译（与 App 的 SWIFT_VERSION 5 一致），Swift 6 严格并发迁移留作独立工作。`LyricsXPackage` 平台随之 10.15 → 12（与 App 部署目标一致）。
+- ✅ **真实 lrcx 库探针 + 由其抓出的一个真 bug（2026-07-26）**：新增 `LyricsLibraryFixtureProbes`，直接把 `~/Music/LyricsX` 里 App 自己下载的 `.lrcx`（本机 1310 个）喂给面板，三个层次：
+  - **扫库**（`everyDisplayedLibraryLineSurvivesKaraokeLayout`）：每个采样文件的每一可显示行都过一遍解析 → `LineTextLayout.build` → `KaraokeFill` 采样。断言的是**引擎的健壮性而非数据的干净**——真实库里有 timetag 索引超行字符数、tag 时间超行时长、词内多连空格在折行点悬挂等形态，引擎必须全部消化。默认采样 40 个文件（约 0.3s）；`APPLE_MUSIC_LYRICS_FIXTURE_SWEEP_LIMIT=2000` 全库（约 8s），当前全绿。`APPLE_MUSIC_LYRICS_FIXTURE_DIRECTORY` 可换素材目录；无库时整套 skip。
+  - **容器级**：真文件喂 `SyncedLyricsContainerView`（离窗模式），断言行视图数 = 可显示行数、行高为正且不重叠、高亮中间行时恰好那一行 `isHighlighted`。
+  - **面板端到端**：真文件经 `HostEnvironment` 同款 publisher 注入整个 `LyricsPanelViewController`（挂在从不上屏的窗口里），断言行数与跟随行切换——这正是抽包时承诺的契约：不开 App、不放歌就能驱动整个面板。
+  - **抓出的真 bug 已修**：`KaraokeFill.fraction` 文档承诺返回 `0...1`，但对「tag 索引超过行字符数」的真实文件返回了 2.18（`1022-比尔的歌 - Bomb比尔.lrcx` 的制作人行）——图层侧恰好有第二道 clamp 所以视觉没炸，但契约已破。修复：`fraction` 出口统一 clamp。
+  - **探针标定两则**（不是引擎 bug，是断言过强）：①Core Text 允许折行点空白悬挂在行框外、词自带尾随空格，包含性判定改为按词内最长空白连长给悬挂容差，且只查有墨迹的词；②tag 时间可超过 `<end>` 声明的时长，「结束后必须填满」的时刻取两者较大值。
+- ✅ **扫掠白色从未上屏的回归 + 亮度层级压扁（2026-07-26 深夜修复）**。用户反馈「跟 AM 还是差好多，应该一眼就能看出来」——确实一眼可见，且探针全绿拦不住，因为探针只量墨迹几何、对颜色是瞎的。
+  - **定位过程（三级证据链，可复用）**：①实机窗口截图逐行量笔画亮度峰值：AM 当前行已唱部分 1.00（纯白），我们**唱完了的**当前行只有 0.595——恰好等于「未唱 50% 白叠背景」，即已唱白从未出现；②探针逐帧导 PNG，fill=0.5 的帧无一白像素——问题在引擎不在 App 胶水；③把 `LineProgressGradientLayer` 源码抄到 scratchpad 单独经 `CARenderer` 渲染，抄写时无意多写了一行 `applyColor()`，立即正常——同一份代码一行之差，真凶锁定。
+  - **根因**：`LineProgressGradientLayer.init` 里 `self.color = color` 指望 `didSet` 把颜色传进子层，但 **Swift 在所属类自己的初始化器内赋值不触发属性观察器**——每个新建的扫掠层生来无色（`fillLayer.backgroundColor` / `gradientLayer.colors` 都是 nil）。且行视图的顺序是先设 `sungColor` 再 `rebuild()`（重建渐变层），外部赋值也救不回来。修复：init 内显式调 `applyColor()`。
+  - **亮度层级**：AM 实测非当前行**不按距离压暗**——d1~d4 笔画峰值全部平在 ~0.5（层次感来自模糊，不来自透明度阶梯）；我们此前的 `0.55 − 0.05·d`（下限 0.125）是自己发明的，面板下半截沉进背景。改为非选中一律 0.55。
+  - **探针补色觉**：`LineEmphasisProbes` 新增第 3 条断言——fill=0.5 帧，已唱半区近白像素 > 500、未唱半区 < 50（避开 30pt 羽化带 ±35pt）。这类「渐变没画出来」的回归从此过不了测试。
+  - **顺带排除两个伪差距**：当前行字号与邻行放大裁剪比对完全相同（「看着大」是模糊吃掉笔画边缘的错觉，与 lldb dump 的 `deselectedTransform = identity` 互证）；行 alpha 机制本身正常。
+- ✅ **模糊换回私有 `CAFilter`（2026-07-26 深夜，用户明确豁免 App Review 顾虑）**。`NSClassFromString("CAFilter")` + `filterWithType: "gaussianBlur"`，滤镜类、key path（`filters.gaussianBlur.inputRadius`，与反汇编逐字节相同）、渲染路径（render server 原生，不再需要 `NSView.layerUsesCoreImageFilters`，也不再有 Core Image 进程内合成）全部与 Music 同源；类不存在时优雅退化为无模糊。
+  - **重要实测更正**：CAFilter 与 `CIGaussianBlur` 的 `inputRadius` **语义完全相同**（同场景阶跃边缘并排量：两者 r=3 都是 10px、r=1.875 都是 6px）。因此 0.625 换算系数补偿的不是「私有 vs 公开」的差异，而是 **Music 存储常数 3 与其实际渲染效果（≈1.875）之间的内部缩放**——Music 在把 3 写进滤镜前显然还除过什么（尚未在反汇编中找到那一步）。系数保留、常量更名 `renderedBlurRadiusScale`，注释以屏幕实测为锚。
+  - 本批验证：LineEmphasisProbes（含新色觉断言）+ LyricsLibraryFixtureProbes 全绿；workspace Debug 构建 0 error / 0 代码 warning；实机重启后窗口截图复核（见下）。
+- ✅ **逐字弹跳「像机器人」→ 波浪化（2026-07-26 深夜）**。用户描述得很准：「我们的弹跳像机器人摆动，AM 则流畅得像摇摆的旗子」。同时用户还观察到「AM 不是每首歌都有这效果，像是要歌词格式里的数值支撑」——这条观察正是病因所在。
+  - **结构性病因，不是参数问题**。AM 的动画单位是**词**（TTML 里一个带起止时间的 `<span>`，横跨多个字母/汉字），波来自**词内部**字形之间的错峰。它那两个常数因此是这样配合的：弹簧周期 = 整个**词**的时长（很长），而每个字形的回落只等 `2 × 词时长 ÷ 字形数`（很短）——于是字形**永远到不了顶就开始往回走**，与邻居的运动大幅重叠，这就是旗子。
+  - **我们的 lrcx 是逐字时间戳**，每个"词"只剩一个字形，两个机制同时退化：①`stagger × (序号+1)` 无字可错，退化成纯延迟 0.4×字长（实测一个 0.47s 的字要晚 0.19s 才起跳，0.1s 的提前量补不回来）；②回落按 `2×字长` 触发，而弹簧 1.46×字长就停稳了——**每个字在顶上冻结约 0.6 秒**。升→冻→落、彼此不重叠，就是机器人。
+  - **定位方法（可复用）**：动画参数与 `beginTime` 全是已知量，所以不必测像素——直接把调度解析地积分出来画成时间×位移表。用真实歌词 `沉睡中缠绵 清醒又幻灭` 的时间戳跑出的表里，每个字的"冻结平台"一眼可见；同一套公式喂给一个 5 字形的词则是每字全程在动、幅度呈梯度（横向读 6,6,6,4,3）、峰值仅 67%。两张表并排就是病因和药方。
+  - **修法**：`LineTextLayout` 新增**短语分组**（`Word.phraseDuration` / `phraseGlyphCount`）——按空白切分，遇折行、无时间戳的词、以及跨度超过 Music 自己的 `maximumEmphasisSpringPeriod`（3s）时断开；弹簧周期与回落延迟改用**短语**跨度，让 Music 的公式回到它被设计的区间。**每个字的起跳仍锚在它自己被唱到的时刻**（`scheduleDueWords` 本来就是这么触发的），不用均匀错峰，否则长句里动画会跑到歌声前面。
+  - **有意偏离 AM 一处**：字形延迟由 `stagger × (序号+1)` 改为 `× 序号`。AM 用 +1 是因为它的 stagger 是"词时长÷该词字形数"，很小；我们的 stagger 来自短语，而词只含一个字形，+1 会让每个字都晚一整拍。词内部的错峰逻辑不变，只去掉了这个前置偏移。
+  - **分组规则是对我们数据格式的适配，不是从 AM 抄的**——AM 不需要它，因为它的 TTML 天生就是词级。Music 的常数与公式一个未动。
+  - **探针**：新增 `emphasisRipplesAcrossNeighboursInsteadOfFreezingEachGlyph`，逐帧采样每个字形 presentation 层的位置，断言两件事：①任一时刻至少 3 个字形同时在动（防"逐字轮流"回归）②没有字形在离开静止位后**真正停住**超过 0.15s（防"顶上冻结"回归）。"停住"用比"在动"严一个数量级的阈值（0.01pt/帧 vs 0.05），因为弹簧换向时速度必然过零、但不会真停——这一点最初写松了导致探针在 0.25s 边界抖动。**已反向验证**：把代码改回旧调度，两条断言都如实失败（同时在动 2 个、冻结 0.35s）。
+  - `LineEmphasisProbes` 整体改为 `@Suite(.serialized)`：两条探针都跑真实墙钟时间线、回落批次经主队列 `asyncAfter`，并行时会在彼此的 `await` 点交错，互相污染测量。
+- ✅ **行切换滚动弹簧提速到实测值（2026-07-26 深夜）**。用户反馈行间「没有任何动画效果，就是线性的上移，看不到弹跳」。
+  - **测法**：把 AM 录屏的歌词列抽成灰度条带，逐帧对齐求出每帧滚动位移，再对 `remaining(t) = D·e^(−ζωₙt)·[cos(ω_d t) + (ζωₙ/ω_d)·sin(ω_d t)]` 拟合 (ωₙ, ζ, 起始时刻)。注意录屏容器 60fps 但内容仅 30Hz（每隔一帧位移为 0），必须先按真实内容帧率重采样，否则两次切换会拟合出互相矛盾的结果。
+  - **结果**：两次单行推进各约 90pt，拟合 ωₙ 15.1/ζ 0.93 与 ωₙ 11.5/ζ 0.86（RMS 1.5pt），**峰值速度均为 570 pt/s**。我们原本的 ωₙ=10 峰值仅 370 pt/s、0.67s 才落定（AM 约 0.35s）。曲线的中段因此接近匀速，而末段低速长尾几乎不可见——合起来正是「线性上移」的观感。
+  - **改动**：`scrollSpringNaturalFrequency` 10 → 13.3，阻尼比 0.9 不变。原值注释称取自 `lineChangeSpringTimingParametersValues`（mass 1/stiffness 100/damping 18），但屏幕上的运动快了一半——要么该字段不是喂给这个动画的，要么 Music 在中间做了缩放。**以屏幕实测为准**，并在注释里写明这一冲突。
+  - **顺带澄清**：AM 的行切换**没有位置过冲**（ζ≈0.9 的过冲仅 0.15%，不可见）。用户说的"弹跳感"来自**起步猛、收得干净**，不是回弹。所以没有为了"看起来更弹"而降低阻尼比。
+  - **积分器本身无误**：把 `stepScrollSpring()` 的闭式解原样重跑，产生的是标准弹簧曲线（0.1s 达峰、0.67s 落定），与理论一致——问题只在常数。
 - 📋 **剩余（均为净负价值或越界，故未做）**：
   - **CAGradientLayer mask 零重绘**：会替换已通过三轮评审的 two-pass draw（回归风险），且涉及 flipped-layer 坐标；two-pass 仅重绘单行、性能已足，故不为优化而冒险。
   - **精确 Apple 常量**：specs 从 Music 侧注入，且 Apple 的 spec 模型（selectedLinePosition/contentInsets/lineSpacing/paragraphSpacing/emphasizingScaleRange 分立 + 逐字动态缩放）与本简化架构映射不佳，原始数值套用价值低；当前经验值最适合视觉微调。
   - **BackgroundVocals（和声）样式**：需 LyricsKit 暴露和声数据（越界，不改依赖）。
-  - 逐字精确扫光（per-glyph）/ 字级缩放强调：可选增强，宜视觉验证后做。
+  - ~~逐字精确扫光（per-glyph）/ 字级缩放强调~~：已于 2026-07-26 完成，见下方「逐字弹跳」。
 
 ## 0. 背景与结论先行
 
@@ -169,6 +290,8 @@ LyricsPanelViewController : NSViewController            // 替换 NSHostingContr
 - Apple 的 `emphasizingScaleRange`：唱到某字时该字 `transform.scale` 在区间内放大并回弹（配 spring）。
 - 实现：在 `WordFillContentLayer` 下为活跃词/字建 `GlyphLayer`（仅活跃区，不是整行所有字都建），逐字 spring 缩放 + 透明度。
 - 成本权衡：字形级层数多；先做到词级填充，强调作为增强项，按数据/性能开关。
+
+> **实际落地（2026-07-26）与本节不同**：没有建 `GlyphLayer`，改为 CPU 解析求解同一条临界阻尼 spring，把 scale + 上抬折进已有的单次 `draw(_:)`。这样既避开了「字形级层数多」的成本，也不用管层的创建/回收，图层树保持扁平。详见进度列表中的「逐字弹跳」条目与 `GlyphEmphasisSchedule.swift`。
 
 ### 4.6 逐帧驱动与时间源
 - `CADisplayLink` 取代 30fps `Timer`：跟随刷新率（ProMotion 120Hz）。

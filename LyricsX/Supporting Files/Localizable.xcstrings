@@ -929,6 +929,7 @@
       }
     },
     "No Lyrics" : {
+      "extractionState" : "stale",
       "localizations" : {
         "ar" : {
           "stringUnit" : {

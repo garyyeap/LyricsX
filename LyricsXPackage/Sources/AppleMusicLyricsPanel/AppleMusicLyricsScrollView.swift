@@ -38,8 +38,8 @@ extension AppleMusicLyrics {
         // semantics by stashing the per-frame value here.
         private var currentFrameTimestamp: TimeInterval = 0
         private var preferenceObservers: Set<AnyCancellable> = []
-        // The lyrics display time resolved once per display-link frame; drives the
-        // karaoke fill and the intro/interlude indicators together.
+        /// The lyrics display time resolved once per display-link frame; drives the
+        /// karaoke fill and the intro/interlude indicators together.
         private var resolvedPlaybackTime: TimeInterval = 0
 
         // Auto-follow scroll. Apple Music animates a single spring on
@@ -58,13 +58,24 @@ extension AppleMusicLyrics {
         private var scrollTargetY: CGFloat?
         private var scrollVelocity: CGFloat = 0
         private var lastScrollTickTimestamp: CFTimeInterval = 0
-        // `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
-        // mass 1, stiffness 100, damping 18 → damping ratio ζ = 18/(2·√100) = 0.9.
-        private let scrollSpringNaturalFrequency: CGFloat = 10      // √(stiffness / mass)
-        private let scrollSpringDampingRatio: CGFloat = 0.9         // damping / (2·√(stiffness·mass))
+        // Measured off a screen recording of Music 26.5.2 rather than read out of
+        // `lineChangeSpringTimingParametersValues` (that struct reads as mass 1,
+        // stiffness 100, damping 18, i.e. ωₙ = 10 — but the motion on screen is
+        // half again as fast, so either the field is not the one that reaches this
+        // animation or Music scales it on the way in).
+        //
+        // Method: recover the per-frame scroll offset by aligning consecutive
+        // frames, then fit `remaining(t) = D·e^(−ζωₙt)·[cos(ω_d t) + (ζωₙ/ω_d)·sin(ω_d t)]`
+        // over (ωₙ, ζ, start). Two separate one-line advances, each ~90 pt of
+        // travel, fit ωₙ 15.1 / ζ 0.93 and ωₙ 11.5 / ζ 0.86 with 1.5 pt RMS, and
+        // both peak at 570 pt/s. The old ωₙ = 10 peaks at 370 pt/s and takes
+        // 0.67 s to settle against Music's ~0.35 s, which is what made a line
+        // change read as a slow linear drift with no spring to it at all.
+        private let scrollSpringNaturalFrequency: CGFloat = 13.3 // √(stiffness / mass)
+        private let scrollSpringDampingRatio: CGFloat = 0.9 // damping / (2·√(stiffness·mass))
         private var lastHighlightedPosition: Int?
-        // A line advance further than this (e.g. a seek) snaps instantly instead of
-        // springing across the whole song.
+        /// A line advance further than this (e.g. a seek) snaps instantly instead of
+        /// springing across the whole song.
         private let scrollJumpThreshold = 5
         // The active (highlighted) line is centred vertically in the viewport.
         // The document is padded by half the clip height at the top and bottom
@@ -79,15 +90,16 @@ extension AppleMusicLyrics {
         private var introEndTime: Double = 0
         private let introGapThreshold: Double = 4.0
 
-        // Mid-song instrumental breaks (word-timed lyrics only, where line end
-        // times are known). Persistent inter-verse slots that fill during their
-        // gap. Additive: empty unless a real gap is detected.
+        /// Mid-song instrumental breaks (word-timed lyrics only, where line end
+        /// times are known). Persistent inter-verse slots that fill during their
+        /// gap. Additive: empty unless a real gap is detected.
         private struct InterludeSegment {
             let view: SyncedLyricsInstrumentalView
             let startTime: Double
             let endTime: Double
             let afterEnabledPosition: Int
         }
+
         private var interludeSegments: [InterludeSegment] = []
         private let interludeGapThreshold: Double = 5.0
 
@@ -103,11 +115,11 @@ extension AppleMusicLyrics {
                 name: NSScrollView.willStartLiveScrollNotification,
                 object: scrollView
             )
-            // Re-render translations live when the bilingual / Chinese-conversion
+            // Re-render translations live when the host's translation
             // preferences change while a track is displayed.
-            defaults.publisher(for: [.preferBilingualLyrics, .chineseConversionIndex])
+            AppleMusicLyrics.hostEnvironment.translationSettingsDidChange
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.refreshTranslations() }
+                .sink { [weak self] in self?.refreshTranslations() }
                 .store(in: &preferenceObservers)
         }
 
@@ -378,16 +390,14 @@ extension AppleMusicLyrics {
         private func updateDistances(animated: Bool) {
             let highlightedPosition = highlightedOriginalIndex.flatMap { lineViewByOriginalIndex[$0]?.enabledPosition }
             for view in enabledLineViews {
-                let target: CGFloat
-                let isSelected: Bool
-                if let highlightedPosition {
-                    let distance = abs(view.enabledPosition - highlightedPosition)
-                    target = distance == 0 ? 1.0 : max(0.125, min(0.55 - CGFloat(distance) * 0.05, 0.55))
-                    isSelected = distance == 0
-                } else {
-                    target = 0.55
-                    isSelected = false
-                }
+                let isSelected = highlightedPosition.map { view.enabledPosition == $0 } ?? false
+                // Every non-selected line sits at one flat opacity no matter how
+                // far from the selected one it is — measured off a Music 26.5.2
+                // recording, stroke peaks hold at ~0.5 luminance from one line
+                // away to four. Depth comes from the blur, not an opacity ramp;
+                // the ramp this replaces sank the bottom of the panel into the
+                // background.
+                let target: CGFloat = isSelected ? 1.0 : 0.55
                 if animated {
                     view.animateAlpha(to: target, duration: 0.5)
                 } else {
@@ -396,6 +406,12 @@ extension AppleMusicLyrics {
                 // `deselectedTransform` is the identity (no whole-line scale) — kept
                 // for the active line staying at 1.0.
                 view.setLineSelected(isSelected, animated: animated)
+                // Music blurs every line that is not the selected one, at one
+                // fixed radius regardless of distance. It has no "nothing is
+                // selected" state to speak of, so the guard is ours: blurring the
+                // whole panel during an intro reads as broken rather than as
+                // depth.
+                view.setLineBlurred(highlightedPosition != nil && !isSelected, animated: animated)
             }
         }
 
@@ -473,11 +489,11 @@ extension AppleMusicLyrics {
             let naturalFrequency = scrollSpringNaturalFrequency
             let dampingRatio = scrollSpringDampingRatio
             let dampedFrequency = naturalFrequency * sqrt(1 - dampingRatio * dampingRatio) // ω_d
-            let decayRate = dampingRatio * naturalFrequency                                // σ = ζ·ωₙ
+            let decayRate = dampingRatio * naturalFrequency // σ = ζ·ωₙ
 
             let currentY = scrollView.contentView.bounds.origin.y
-            let displacement = currentY - targetY    // y₀ (distance still to travel)
-            let velocity = scrollVelocity             // v₀
+            let displacement = currentY - targetY // y₀ (distance still to travel)
+            let velocity = scrollVelocity // v₀
             let decay = CGFloat(exp(Double(-decayRate * step)))
             let cosine = CGFloat(cos(Double(dampedFrequency * step)))
             let sine = CGFloat(sin(Double(dampedFrequency * step)))
@@ -485,10 +501,14 @@ extension AppleMusicLyrics {
             // Exact underdamped step:
             //   y(t) = e^{-σt}·[ y₀·cos(ω_d t) + ((v₀ + σ·y₀)/ω_d)·sin(ω_d t) ]
             //   v(t) = e^{-σt}·[ v₀·cos(ω_d t) − ((σ·v₀ + ωₙ²·y₀)/ω_d)·sin(ω_d t) ]
-            let nextDisplacement = decay * (displacement * cosine
-                + (velocity + decayRate * displacement) / dampedFrequency * sine)
-            let nextVelocity = decay * (velocity * cosine
-                - (decayRate * velocity + naturalFrequency * naturalFrequency * displacement) / dampedFrequency * sine)
+            let nextDisplacement = decay * (
+                displacement * cosine
+                    + (velocity + decayRate * displacement) / dampedFrequency * sine
+            )
+            let nextVelocity = decay * (
+                velocity * cosine
+                    - (decayRate * velocity + naturalFrequency * naturalFrequency * displacement) / dampedFrequency * sine
+            )
 
             if abs(nextDisplacement) < 0.5, abs(nextVelocity) < 1.0 {
                 scrollTargetY = nil
@@ -633,15 +653,17 @@ extension AppleMusicLyrics {
                     hasher.combine(timetag?.duration ?? -1)
                     hasher.combine(line.attachments.translation() ?? "")
                 }
-                count = enabledCount
-                contentHash = hasher.finalize()
+                self.count = enabledCount
+                self.contentHash = hasher.finalize()
             }
         }
 
         // MARK: - Flipped Document View
 
         private final class FlippedDocumentView: NSView {
-            override var isFlipped: Bool { true }
+            override var isFlipped: Bool {
+                true
+            }
         }
     }
 }

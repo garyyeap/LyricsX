@@ -28,17 +28,39 @@ xcodebuild -project LyricsX.xcodeproj -scheme LyricsX -configuration Release bui
 xcodebuild -project LyricsX.xcodeproj -scheme LyricsX -configuration Release archive
 ```
 
-There are no automated tests configured in the Xcode scheme. The `LyricsXPackage` has an empty test target `LyricsXFoundationTests`.
+There are no automated tests configured in the Xcode scheme. `LyricsXPackage` has an empty test target `LyricsXFoundationTests`, plus a real probe suite `AppleMusicLyricsPanelTests` that renders the Apple Music lyrics engine offscreen through `CARenderer` and asserts its animation geometry and karaoke colour (no clipping, bounded lift, sweep actually paints white, no position drift):
+
+```bash
+# Offscreen probe tests for the Apple Music lyrics engine (~8s, needs a GPU session)
+cd LyricsXPackage && swift test --filter LineEmphasisProbes
+
+# Same, dumping every rendered frame as a PNG for eyeballing
+APPLE_MUSIC_LYRICS_PROBE_FRAME_DIRECTORY=/tmp/probe-frames swift test --filter LineEmphasisProbes
+
+# Feed real downloaded .lrcx files (from ~/Music/LyricsX) through the whole
+# panel: parse → layout → container rows → publisher-injected view controller.
+# Skips itself when no library exists; APPLE_MUSIC_LYRICS_FIXTURE_DIRECTORY
+# points it elsewhere, APPLE_MUSIC_LYRICS_FIXTURE_SWEEP_LIMIT (default 40)
+# widens the sweep to the whole library.
+swift test --filter LyricsLibraryFixtureProbes
+```
+
+`LyricsXWidgetShared`'s `WidgetDataStoreTests` has a pre-existing parallel-execution race (two tests share one store file), so a bare `swift test` may show its failures — they are unrelated to the panel probes.
+
+Standalone `swift build` / `swift test` in `LyricsXPackage/` resolves `LyricsKit`/`MusicPlayer` from their remote `develop` branches by default; set `LYRICSX_USE_LOCAL_DEPENDENCY=1` to use the sibling checkouts instead. The `LyricsXPackage/Package.resolved` it writes is gitignored — the canonical pins live in the Xcode project.
 
 ## Linting & Formatting
 
 ```bash
-# SwiftLint (configured in .swiftlint.yml, line_length: 150)
-swiftlint
-
 # SwiftFormat (configured in .swiftformat, 4-space indent, LF line breaks)
 swiftformat .
 ```
+
+SwiftLint is **not** part of this project any more: `.swiftlint.yml` and the
+`SwiftLint` aggregate target were both removed in `2adf685`. Running `swiftlint`
+by hand still works but falls back to its built-in defaults (e.g. `line_length`
+120), which do not reflect this codebase's conventions — treat its output as
+advisory, not as a gate. The build is the gate.
 
 ## Release Workflow
 
@@ -160,20 +182,21 @@ Setting evaluation order (high overrides low): target xcconfig → project xccon
 |---|---|
 | `LyricsX` | Main macOS app |
 | `LyricsXHelper` | LoginItem helper embedded in `Contents/Library/LoginItems/`, watches for music player launch and auto-starts the main app |
-| `SwiftLint` | Aggregate target for running SwiftLint |
 
 ### Core Dependencies (via SPM)
 
 - **LyricsKit** (`MxIris-LyricsX-Project/LyricsKit`, branch: main) — lyrics search/parsing engine
 - **MusicPlayer** (`MxIris-LyricsX-Project/MusicPlayer`, branch: master) — music player abstraction layer
 - **mediaremote-adapter** (`MxIris-LyricsX-Project/mediaremote-adapter`) — transitive dependency of MusicPlayer; provides the `MediaRemoteAdapter` product used by `SystemMedia` to bridge the private MediaRemote APIs
-- **LyricsXFoundation** (local package in `LyricsXPackage/`) — thin re-export wrapper: `@_exported import LyricsKit`
+- **LyricsXFoundation** (local package in `LyricsXPackage/`) — re-export wrapper (`@_exported import LyricsKit`) plus small shared extensions (`PlaybackState.lyricsDisplayTime`, `MusicTrack.resolvedArtwork`)
+- **AppleMusicLyricsPanel** (local package target in `LyricsXPackage/`) — the Apple Music-style lyrics panel: CALayer karaoke engine, panel view controller, gradient background. Extracted from the app target so it builds and probe-tests standalone (`swift test --filter LineEmphasisProbes`). All app coupling flows through one injection seam, `AppleMusicLyrics.HostEnvironment` (player, translation policy, lyric time delay), installed by the app-side glue
 
 ### App Internal Structure (`LyricsX/`)
 
 The app uses a **Combine-driven reactive architecture** with shared singletons:
 
 - **`Component/`** — Core singletons: `AppController` (central lyrics search/management hub), `AppDelegate`, `SelectedPlayer` (player adapter). `AppController` listens for track changes via Combine publishers, runs async lyrics searches (`AsyncSequence`), and distributes results to display layers.
+- **`AppleMusicLyrics/`** — App-side glue for the `AppleMusicLyricsPanel` package target: just `AppleMusicLyricsWindowController`, which owns the panel window (frame autosave, pin button, HUD lifecycle), installs `AppleMusicLyrics.HostEnvironment`, and injects `AppController`'s lyrics publishers into the panel. The engine itself lives in `LyricsXPackage/Sources/AppleMusicLyricsPanel/`.
 - **`Controller/`** — Display controllers: `KaraokeLyricsController` (desktop karaoke overlay), `MenuBarLyricsController` (menu bar text), `TouchBarLyricsController`
 - **`LyricsHUD/`** — Floating lyrics panel (`LyricsHUDViewController`)
 - **`Preferences/`** — Preference pane ViewControllers (General, Display, Filter, Shortcut, Source, Lab)

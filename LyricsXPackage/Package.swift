@@ -54,11 +54,15 @@ extension Package.Dependency {
 
 let package = Package(
     name: "LyricsXPackage",
-    platforms: [.macOS(.v10_15)],
+    platforms: [.macOS(.v12)],
     products: [
         .library(
             name: "LyricsXFoundation",
             targets: ["LyricsXFoundation"]
+        ),
+        .library(
+            name: "AppleMusicLyricsPanel",
+            targets: ["AppleMusicLyricsPanel"]
         ),
         .library(
             name: "LyricsXWidgetShared",
@@ -92,6 +96,18 @@ let package = Package(
             url: "https://github.com/Mx-Iris/FrameworkToolbox",
             from: "0.5.2"
         ),
+        .package(
+            url: "https://github.com/Mx-Iris/UIFoundation",
+            from: "0.9.0"
+        ),
+        .package(
+            url: "https://github.com/Lakr233/ColorfulX",
+            from: "6.1.0"
+        ),
+        .package(
+            url: "https://github.com/Lakr233/MSDisplayLink",
+            from: "2.0.0"
+        ),
     ],
     targets: [
         .target(
@@ -106,6 +122,32 @@ let package = Package(
             name: "LyricsXWidgetShared",
             dependencies: [
                 .product(name: "FoundationToolbox", package: "FrameworkToolbox"),
+            ]
+        ),
+        .target(
+            name: "AppleMusicLyricsPanel",
+            dependencies: [
+                "LyricsXFoundation",
+                .product(name: "MusicPlayer", package: "MusicPlayer"),
+                .product(name: "UIFoundation", package: "UIFoundation"),
+                .product(name: "ColorfulX", package: "ColorfulX"),
+                .product(name: "MSDisplayLink", package: "MSDisplayLink"),
+            ],
+            swiftSettings: [
+                // The sources moved here verbatim from the app target, which
+                // builds with SWIFT_VERSION 5 — this keeps them compiling
+                // identically instead of also taking on a strict-concurrency
+                // migration in the same change.
+                .swiftLanguageMode(.v5)
+            ]
+        ),
+        .testTarget(
+            name: "AppleMusicLyricsPanelTests",
+            dependencies: [
+                "AppleMusicLyricsPanel"
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v5)
             ]
         ),
         .testTarget(

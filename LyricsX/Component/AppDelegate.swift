@@ -1,4 +1,5 @@
 import AppKit
+import AppleMusicLyricsPanel
 import GenericID
 import MASShortcut
 import MusicKit

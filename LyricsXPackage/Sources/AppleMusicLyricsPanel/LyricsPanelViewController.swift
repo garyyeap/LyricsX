@@ -10,8 +10,11 @@ extension AppleMusicLyrics {
     /// ColorfulX Metal gradient background, the album/track/transport chrome,
     /// and the CALayer lyrics engine — replacing the previous SwiftUI `RootView`
     /// + `NSHostingController`.
-    final class LyricsPanelViewController: NSViewController {
+    public final class LyricsPanelViewController: NSViewController {
         // MARK: Data
+
+        private let lyricsPublisher: AnyPublisher<Lyrics?, Never>
+        private let currentLineIndexPublisher: AnyPublisher<Int?, Never>
 
         private var currentLyrics: Lyrics?
         private var currentLineIndex: Int?
@@ -46,13 +49,27 @@ extension AppleMusicLyrics {
 
         // MARK: Lifecycle
 
-        override func loadView() {
+        public init(
+            lyricsPublisher: AnyPublisher<Lyrics?, Never>,
+            currentLineIndexPublisher: AnyPublisher<Int?, Never>
+        ) {
+            self.lyricsPublisher = lyricsPublisher
+            self.currentLineIndexPublisher = currentLineIndexPublisher
+            super.init(nibName: nil, bundle: nil)
+        }
+
+        @available(*, unavailable)
+        public required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        public override func loadView() {
             // `DraggablePanelView` is a `LayerBackedView`; its black background is
             // applied via the renderer in `updateLayer`, not poked onto the layer.
             view = DraggablePanelView()
         }
 
-        override func viewDidLoad() {
+        public override func viewDidLoad() {
             super.viewDidLoad()
             buildHierarchy()
             wireInteraction()
@@ -67,12 +84,12 @@ extension AppleMusicLyrics {
             refreshArtwork()
         }
 
-        override func viewDidAppear() {
+        public override func viewDidAppear() {
             super.viewDidAppear()
             startChromeTimer()
         }
 
-        override func viewDidDisappear() {
+        public override func viewDidDisappear() {
             super.viewDidDisappear()
             chromeTimer?.invalidate()
             chromeTimer = nil
@@ -207,7 +224,7 @@ extension AppleMusicLyrics {
 
         // MARK: Adaptive layout
 
-        override func viewDidLayout() {
+        public override func viewDidLayout() {
             super.viewDidLayout()
             let size = view.bounds.size
             let isWide = size.width > 640
@@ -246,12 +263,12 @@ extension AppleMusicLyrics {
         // MARK: Subscriptions
 
         private func subscribe() {
-            AppController.shared.$currentLyrics
+            lyricsPublisher
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] lyrics in self?.applyLyrics(lyrics) }
                 .store(in: &cancellables)
 
-            AppController.shared.$currentLineIndex
+            currentLineIndexPublisher
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] index in self?.applyLineIndex(index) }
                 .store(in: &cancellables)
@@ -468,7 +485,9 @@ extension AppleMusicLyrics {
             fatalError("init(coder:) has not been implemented")
         }
 
-        override var wantsUpdateLayer: Bool { true }
+        override var wantsUpdateLayer: Bool {
+            true
+        }
 
         override func updateLayer() {
             super.updateLayer()

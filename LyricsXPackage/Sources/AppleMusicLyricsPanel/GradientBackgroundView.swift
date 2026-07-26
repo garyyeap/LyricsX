@@ -32,8 +32,8 @@ extension AppleMusicLyrics {
 
         private func setup() {
             gradientView.translatesAutoresizingMaskIntoConstraints = false
-            gradientView.speed = 0.55          // slow ambient drift
-            gradientView.noise = 2             // a touch of grain; high noise reads as muddy
+            gradientView.speed = 0.55 // slow ambient drift
+            gradientView.noise = 2 // a touch of grain; high noise reads as muddy
             gradientView.bias = 0.003
             gradientView.transitionSpeed = 2.0 // spring crossfade on track change
             gradientView.setColors(ColorfulPreset.aurora, animated: false)

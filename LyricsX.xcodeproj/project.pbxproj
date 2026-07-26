@@ -22,6 +22,7 @@
 		E9C4E2992AC9A10F004B9EB2 /* MASShortcut in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E2982AC9A10F004B9EB2 /* MASShortcut */; };
 		E9C4E29C2AC9A124004B9EB2 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E29B2AC9A124004B9EB2 /* SnapKit */; };
 		E9C4E2A22AC9A3D6004B9EB2 /* SwiftCF in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E2A12AC9A3D6004B9EB2 /* SwiftCF */; };
+		0AF1A0010B0B0B0B0B0B0B02 /* AppleMusicLyricsPanel in Frameworks */ = {isa = PBXBuildFile; productRef = 0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */; };
 		E9C5763D2DEDF539009107B5 /* LyricsXFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E9C5763C2DEDF539009107B5 /* LyricsXFoundation */; };
 		E9C5763F2DEDF539009107B5 /* LyricsXWidgetShared in Frameworks */ = {isa = PBXBuildFile; productRef = E9C5763E2DEDF539009107B5 /* LyricsXWidgetShared */; };
 		E9EF0D512D6F5ECD00D45E0F /* UIFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E9EF0D502D6F5ECD00D45E0F /* UIFoundation */; };
@@ -149,6 +150,7 @@
 				E983FA212C85EA6E00170CF7 /* MarqueeLabel in Frameworks */,
 				E983FA242C86302200170CF7 /* MarqueeLabel in Frameworks */,
 				E9C5763D2DEDF539009107B5 /* LyricsXFoundation in Frameworks */,
+				0AF1A0010B0B0B0B0B0B0B02 /* AppleMusicLyricsPanel in Frameworks */,
 				E9C5763F2DEDF539009107B5 /* LyricsXWidgetShared in Frameworks */,
 				BBB03F2D232FB3AF00A3879E /* GenericID in Frameworks */,
 				E9EF0D532D6F5ECD00D45E0F /* UIFoundationToolbox in Frameworks */,
@@ -295,6 +297,7 @@
 				E9EF0D502D6F5ECD00D45E0F /* UIFoundation */,
 				E9EF0D522D6F5ECD00D45E0F /* UIFoundationToolbox */,
 				E9C5763C2DEDF539009107B5 /* LyricsXFoundation */,
+				0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */,
 				E9C5763E2DEDF539009107B5 /* LyricsXWidgetShared */,
 				E5E613E102B0FC5E5F71472F /* ColorfulX */,
 				F00DA0030A0A0A0A0A0A0A03 /* MSDisplayLink */,
@@ -780,6 +783,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E9C4E2A02AC9A3D6004B9EB2 /* XCRemoteSwiftPackageReference "SwiftCF" */;
 			productName = SwiftCF;
+		};
+		0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppleMusicLyricsPanel;
 		};
 		E9C5763C2DEDF539009107B5 /* LyricsXFoundation */ = {
 			isa = XCSwiftPackageProductDependency;

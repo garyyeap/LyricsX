@@ -1,6 +1,9 @@
 Product
 build/
 Scripts/release/bin/
+# Standalone `swift build`/`swift test` in LyricsXPackage writes branch-pin
+# snapshots here; the canonical pins are the ones in LyricsX.xcodeproj.
+LyricsXPackage/Package.resolved
 .DS_Store
 xcuserdata
 .claude

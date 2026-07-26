@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import LyricsXFoundation
 import MusicPlayer
 
 class TouchBarArtworkViewController: NSViewController {

@@ -1,12 +1,24 @@
 import AppKit
-
-enum AppleMusicLyrics {}
+import Combine
+import MusicPlayer
+import OpenCC
+import AppleMusicLyricsPanel
 
 extension AppleMusicLyrics {
     final class WindowController: NSWindowController, NSWindowDelegate {
         private static let windowFrameName = NSWindow.FrameAutosaveName("AppleMusicLyricsWindow")
 
         init() {
+            AppleMusicLyrics.hostEnvironment = .init(
+                player: MusicPlayers.Selected.shared,
+                isBilingualPreferred: { defaults[.preferBilingualLyrics] },
+                transformTranslation: { ChineseConverter.shared?.convert($0) ?? $0 },
+                lyricsTimeDelay: { $0.adjustedTimeDelay },
+                translationSettingsDidChange: defaults
+                    .publisher(for: [.preferBilingualLyrics, .chineseConversionIndex])
+                    .map { _ in }
+                    .eraseToAnyPublisher()
+            )
             super.init(window: nil)
         }
 
@@ -20,7 +32,10 @@ extension AppleMusicLyrics {
         }
 
         override func loadWindow() {
-            let viewController = LyricsPanelViewController()
+            let viewController = LyricsPanelViewController(
+                lyricsPublisher: AppController.shared.$currentLyrics.eraseToAnyPublisher(),
+                currentLineIndexPublisher: AppController.shared.$currentLineIndex.eraseToAnyPublisher()
+            )
 
             let window = NSWindow(contentViewController: viewController)
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
