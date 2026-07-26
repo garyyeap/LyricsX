@@ -259,6 +259,12 @@ extension AppleMusicLyrics {
         }
 
         func animateAlpha(to target: CGFloat, duration: TimeInterval) {
+            // Every line change asks every row for its opacity, and now that the
+            // un-selected rows all share one value, nearly every one of those asks
+            // is a no-op. Spinning up an animation group anyway puts one
+            // `CABasicAnimation` per row on the main thread at exactly the moment
+            // the scroll spring has to start moving cleanly.
+            guard abs(alphaValue - target) > 0.001 else { return }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = duration
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)

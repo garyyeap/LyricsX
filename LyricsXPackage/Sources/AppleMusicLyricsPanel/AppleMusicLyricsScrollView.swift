@@ -58,20 +58,22 @@ extension AppleMusicLyrics {
         private var scrollTargetY: CGFloat?
         private var scrollVelocity: CGFloat = 0
         private var lastScrollTickTimestamp: CFTimeInterval = 0
-        // Measured off a screen recording of Music 26.5.2 rather than read out of
-        // `lineChangeSpringTimingParametersValues` (that struct reads as mass 1,
-        // stiffness 100, damping 18, i.e. ωₙ = 10 — but the motion on screen is
-        // half again as fast, so either the field is not the one that reaches this
-        // animation or Music scales it on the way in).
+        // `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
+        // mass 1, stiffness 100, damping 18 → ωₙ = √(100/1) = 10, ζ = 18/(2·√100) = 0.9.
         //
-        // Method: recover the per-frame scroll offset by aligning consecutive
-        // frames, then fit `remaining(t) = D·e^(−ζωₙt)·[cos(ω_d t) + (ζωₙ/ω_d)·sin(ω_d t)]`
-        // over (ωₙ, ζ, start). Two separate one-line advances, each ~90 pt of
-        // travel, fit ωₙ 15.1 / ζ 0.93 and ωₙ 11.5 / ζ 0.86 with 1.5 pt RMS, and
-        // both peak at 570 pt/s. The old ωₙ = 10 peaks at 370 pt/s and takes
-        // 0.67 s to settle against Music's ~0.35 s, which is what made a line
-        // change read as a slow linear drift with no spring to it at all.
-        private let scrollSpringNaturalFrequency: CGFloat = 13.3 // √(stiffness / mass)
+        // Confirmed against Music 26.5.2 on screen, at full frame rate: three
+        // consecutive one-line advances each travel 80-90 pt and are delivered in
+        // 27-28 steps over 450 ms — i.e. Music moves the clip on *every* display
+        // frame — with step sizes ramping 1 3 4 5 5 6 6 and decaying 5 5 4 4 3 3
+        // 2 2 1 1 1. A 6 pt step at 60 Hz is 360 pt/s, and for ζ = 0.9 the peak
+        // speed of a spring is `travel · ωₙ · 0.395`, which puts ωₙ at 10.1.
+        //
+        // An earlier pass measured 570 pt/s and "fitted" ωₙ ≈ 15 from a 30 fps
+        // recording. That was an aliasing artifact: sampling 60 Hz motion at
+        // 30 Hz merges two frames into one and doubles the apparent per-frame
+        // step. The dumped constants were right all along — capture at the
+        // display's own rate before fitting anything to a motion curve.
+        private let scrollSpringNaturalFrequency: CGFloat = 10 // √(stiffness / mass)
         private let scrollSpringDampingRatio: CGFloat = 0.9 // damping / (2·√(stiffness·mass))
         private var lastHighlightedPosition: Int?
         /// A line advance further than this (e.g. a seek) snaps instantly instead of
