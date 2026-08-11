@@ -11,6 +11,10 @@
   先有一篇被批准的提案。**
   - [0001 切换到下一条歌词候选](Evolutions/0001-next-lyrics-candidate.md) —— 让自动搜索保留候选池，
     并用一个快捷键在候选之间循环切换。
+  - [0002 总是忽略歌词库缓存](Evolutions/0002-always-ignore-cached-lyrics.md) —— 一个开关，
+    让自动匹配不再读 LyricsX 自己存的歌词库，每次都联网搜。
+  - [0003 歌词源排序模式](Evolutions/0003-source-ordering-modes.md) —— 跨来源先比匹配分数，
+    分数接近时才由歌词源顺序裁决。
 
 ## 实现说明
 
