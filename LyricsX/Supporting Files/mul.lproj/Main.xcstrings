@@ -1327,6 +1327,36 @@
         }
       }
     },
+    "nlc-Mi-t01.title" : {
+      "comment" : "Class = \"NSMenuItem\"; title = \"Next Lyrics Candidate\"; ObjectID = \"nlc-Mi-t01\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next Lyrics Candidate"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Next Lyrics Candidate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一条候选歌词"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一條候選歌詞"
+          }
+        }
+      }
+    },
     "Nxv-i6-pWj.title" : {
       "comment" : "Class = \"NSMenuItem\"; title = \"Minimize\"; ObjectID = \"Nxv-i6-pWj\"; Note = \"#bc-ignore!\";",
       "extractionState" : "extracted_with_value",

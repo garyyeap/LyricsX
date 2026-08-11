@@ -113,6 +113,10 @@ class SearchLyricsViewController: NSViewController, NSTableViewDelegate, NSTable
         let lrc = searchResult[index]
         lrc.associateWithTrack(track)
         AppController.shared.currentLyrics = lrc
+        // Hand the whole sorted list over, not just the pick: the
+        // next-candidate shortcut should carry on from what the user chose
+        // here instead of walking a pool built by the automatic search.
+        AppController.shared.adoptLyricsCandidates(searchResult, selecting: lrc, for: track)
         if defaults[.writeToiTunesAutomatically] {
             AppController.shared.writeToiTunes(overwrite: true)
         }

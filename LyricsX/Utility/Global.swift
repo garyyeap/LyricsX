@@ -104,6 +104,10 @@ extension UserDefaults.DefaultsKeys {
     static let lyricsCustomSavingPathBookmark = Key<Data?>("LyricsCustomSavingPathBookmark")
     static let loadLyricsBesideTrack = Key<Bool>("LoadLyricsBesideTrack")
     static let writeBackToLyricsBesideTrack = Key<Bool>("WriteBackToLyricsBesideTrack")
+    /// Track id -> the lyrics file the user picked by hand, encoded by
+    /// `LyricsSelectionOverrideTable`. Consulted before every automatic lookup
+    /// so a manual pick is not undone by an embedded or beside-track file.
+    static let lyricsSelectionOverrides = Key<[String: String]>("LyricsSelectionOverrides")
 
     static let selectedLanguage = Key<String?>("SelectedLanguage")
 
@@ -157,6 +161,7 @@ extension UserDefaults.DefaultsKeys {
     static let shortcutWriteToiTunes = Key<String>("ShortcutWriteToiTunes")
     static let shortcutSearchLyrics = Key<String>("ShortcutSearchLyrics")
     static let shortcutWrongLyrics = Key<String>("ShortcutWrongLyrics")
+    static let shortcutNextLyricsCandidate = Key<String>("ShortcutNextLyricsCandidate")
     static let shortcutTogglePreferences = Key<String>("ShortcutTogglePreferences")
 
     // Filter
@@ -224,11 +229,25 @@ extension UserDefaults.DefaultsKeys {
 // MARK: - Lyrics Priority
 
 private let artworkMatchBonusKey = Lyrics.Metadata.Key("LyricsX.ArtworkMatchBonus")
+private let arrivedAfterPriorityWindowKey = Lyrics.Metadata.Key("LyricsX.ArrivedAfterPriorityWindow")
 
 extension Lyrics {
     var artworkMatchBonus: Double {
         get { (metadata.data[artworkMatchBonusKey] as? Double) ?? 0 }
         set { metadata.data[artworkMatchBonusKey] = newValue }
+    }
+
+    /// Set on results that reached us after the priority window closed. They
+    /// are perfectly good candidates — the user can switch onto them by hand —
+    /// but they must never take the screen on their own, because by then the
+    /// user has been reading the displayed lyrics for seconds.
+    ///
+    /// Carried on the lyrics rather than passed as an argument because the
+    /// artwork-similarity score lands asynchronously, long after the arrival
+    /// that would have supplied such an argument.
+    var arrivedAfterPriorityWindow: Bool {
+        get { (metadata.data[arrivedAfterPriorityWindowKey] as? Bool) ?? false }
+        set { metadata.data[arrivedAfterPriorityWindowKey] = newValue }
     }
 }
 

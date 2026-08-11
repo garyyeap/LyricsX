@@ -324,6 +324,12 @@
                                             <action selector="showCurrentLyricsInFinder:" target="Ady-hI-5gd" id="A8v-rn-vXH"/>
                                         </connections>
                                     </menuItem>
+                                    <menuItem title="Next Lyrics Candidate" identifier="MainMenu.NextLyricsCandidate" id="nlc-Mi-t01">
+                                        <modifierMask key="keyEquivalentModifierMask"/>
+                                        <connections>
+                                            <action selector="nextLyricsCandidate:" target="Ady-hI-5gd" id="nlc-Ac-t01"/>
+                                        </connections>
+                                    </menuItem>
                                     <menuItem title="Wrong Lyrics" tag="203" identifier="MainMenu.WrongLyrics" id="fmS-zv-RcJ">
                                         <modifierMask key="keyEquivalentModifierMask"/>
                                         <connections>

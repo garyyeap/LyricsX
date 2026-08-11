@@ -7,6 +7,21 @@ import LyricsXFoundation
 import WidgetKit
 import LyricsXWidgetShared
 
+/// What a "switch to the next lyrics candidate" request ended up doing.
+enum LyricsCandidateSwitchOutcome {
+    /// Moved onto another candidate. `position` is 1-based, for display.
+    case switched(position: Int, total: Int, service: String?)
+    /// The pool held nothing to switch to — the usual state for a track whose
+    /// lyrics came from the local cache, which never runs a search — so one is
+    /// running now to fill it.
+    case searching
+    /// That search finished without turning up anything other than what is
+    /// already on screen.
+    case exhausted
+    /// Nothing is playing.
+    case unavailable
+}
+
 @Loggable(subsystem: "com.JH.LyricsX.AppController", category: "AppController")
 final class AppController: NSObject {
     static let shared = AppController()
@@ -28,6 +43,29 @@ final class AppController: NSObject {
 
     var searchRequest: LyricsSearchRequest?
     var searchTask: Task<Void, Never>?
+
+    /// Every candidate the current track's search produced, ordered by the same
+    /// relation the manual search panel sorts its list by. The display logic in
+    /// `lyricsReceived` picks the top of it on its own; `advanceToNextLyricsCandidate`
+    /// walks it by hand when that pick was wrong.
+    private(set) var lyricsCandidatePool = PriorityOrderedCandidatePool<Lyrics>(hasHigherPriority: lyricsHasHigherPriority)
+
+    /// The track the pool was filled for. A search that outlives a track change
+    /// would otherwise drop its results into the next track's pool.
+    private var candidatePoolTrackId: String?
+
+    /// Set once the user picks a candidate by hand. While pinned, arriving
+    /// results still enter the pool but never replace `currentLyrics` —
+    /// otherwise a late high-priority result would yank the screen straight
+    /// back off the user's pick.
+    private var candidateSelectionIsPinned = false
+
+    private var candidateReplenishTask: Task<Void, Never>?
+
+    /// What a "next candidate" request ended up doing. Published rather than
+    /// returned because the replenish path resolves asynchronously, and both
+    /// paths should reach the same one piece of UI.
+    let lyricsCandidateSwitchOutcomes = PassthroughSubject<LyricsCandidateSwitchOutcome, Never>()
 
     private var previousPlaybackState: PlaybackState?
 
@@ -351,10 +389,12 @@ final class AppController: NSObject {
         currentLyrics = nil
         currentLineIndex = nil
         searchTask?.cancel()
+        resetLyricsCandidatePool()
         guard let track = selectedPlayer.currentTrack else {
             Task { await ArtworkSimilarityScorer.shared.updateNowPlaying(image: nil, trackId: nil) }
             return
         }
+        candidatePoolTrackId = track.id
         let nowPlayingImage = track.artwork
         let nowPlayingId = track.id
         Task { await ArtworkSimilarityScorer.shared.updateNowPlaying(image: nowPlayingImage, trackId: nowPlayingId) }
@@ -363,6 +403,22 @@ final class AppController: NSObject {
         let artist = track.artist ?? ""
 
         guard !defaults[.noSearchingTrackIds].contains(track.id) else {
+            return
+        }
+
+        // A candidate the user switched to by hand outranks every automatic
+        // lookup below — including lyrics embedded in the audio file and lyrics
+        // sitting beside it, either of which would otherwise win on order alone
+        // and silently undo the choice.
+        if let overrideURL = userSelectedLyricsURL(forTrackId: track.id),
+           let lyrics = loadLyrics(
+               at: overrideURL,
+               securityScopedURL: defaults.lyricsSecurityScopedDirectory(containing: overrideURL),
+               title: title,
+               artist: artist
+           ) {
+            currentLyrics = lyrics
+            adoptAsSoleLyricsCandidate(lyrics)
             return
         }
 
@@ -381,6 +437,7 @@ final class AppController: NSObject {
                     lyrics.filtrate()
                     lyrics.recognizeLanguage()
                     currentLyrics = lyrics
+                    adoptAsSoleLyricsCandidate(lyrics)
                     return
                 }
             }
@@ -402,26 +459,14 @@ final class AppController: NSObject {
         ]
 
         for (url, security, needsSearching) in candidateLyricsURL {
-            if security {
-                guard url.startAccessingSecurityScopedResource() else {
-                    continue
-                }
-            }
-            defer {
-                if security {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            if let lrcContents = try? String(contentsOf: url, encoding: String.Encoding.utf8),
-               let lyrics = Lyrics(lrcContents) {
-                lyrics.metadata.localURL = url
-                lyrics.metadata.title = title
-                lyrics.metadata.artist = artist
-                lyrics.applyQQMusicKanaFurigana()
-                lyrics.filtrate()
-                lyrics.recognizeLanguage()
+            if let lyrics = loadLyrics(
+                at: url,
+                securityScopedURL: security ? url : nil,
+                title: title,
+                artist: artist
+            ) {
                 currentLyrics = lyrics
+                adoptAsSoleLyricsCandidate(lyrics)
                 if needsSearching {
                     break
                 } else {
@@ -434,13 +479,7 @@ final class AppController: NSObject {
             return
         }
 
-        let duration = track.duration ?? 0
-        // Strip bracketed suffixes ("(feat. X)", "[Explicit]", "(Remix)", "【现场版】" …)
-        // from the search title when the preference is on; providers usually return
-        // zero matches for the bracketed form. The full title still drives local
-        // cache lookup above and the lyrics metadata association below.
-        let searchTitle = defaults[.stripSearchTitleBracketsEnabled] ? title.strippingBrackets : title
-        let request = LyricsSearchRequest(searchTerm: .info(title: searchTitle, artist: artist), duration: duration, limit: 5, userInfo: [:])
+        let request = makeLyricsSearchRequest(for: track)
         searchRequest = request
         searchTask = Task { @MainActor in
             do {
@@ -467,13 +506,13 @@ final class AppController: NSObject {
                     let lyricsIsRecovered = lyrics.isFromSearchPlugin
                     let withinWindow = collectionStart.map { Date().timeIntervalSince($0) <= window } ?? false
 
-                    if withinWindow || lyricsIsRecovered {
-                        lyricsReceived(lyrics: lyrics)
-                    }
-                    // Past the window and not a recovery result: drop it (no
-                    // late swap from the direct providers), but keep draining
-                    // the stream so the Route B plugin runs to completion
-                    // instead of being torn down — and cancelled — mid-request.
+                    // Past the window and not a recovery result: it may no
+                    // longer take the screen (no late swap from the direct
+                    // providers), but it is still a candidate the user can
+                    // switch onto by hand — so it goes through the normal path
+                    // and into the pool, just flagged as ineligible to display.
+                    lyrics.arrivedAfterPriorityWindow = !(withinWindow || lyricsIsRecovered)
+                    lyricsReceived(lyrics: lyrics)
                 }
 
                 if defaults[.writeToiTunesAutomatically] {
@@ -501,29 +540,270 @@ final class AppController: NSObject {
         if defaults[.strictSearchEnabled], !lyrics.isMatched() {
             return
         }
-        // Route B re-searches with the recovered native-script name; those
-        // results supersede the original localized-name search outright. A
-        // recovered lyric always replaces a localized one, and a localized
-        // lyric is never allowed to replace a recovered one — within the
-        // same tier the usual quality/source priority decides.
-        let lyricsIsRecovered = lyrics.isFromSearchPlugin
-        if let current = currentLyrics {
-            if lyricsIsRecovered != current.isFromSearchPlugin {
-                guard lyricsIsRecovered else {
-                    return
-                }
-            } else if !lyricsHasHigherPriority(lyrics, over: current) {
-                return
-            }
-        }
 
         lyrics.associateWithTrack(track)
         lyrics.applyQQMusicKanaFurigana()
         lyrics.filtrate()
         lyrics.recognizeLanguage()
         lyrics.metadata.needsPersist = true
-        currentLyrics = lyrics
+
+        // Entering the pool is unconditional: losing the display contest says
+        // nothing about whether the user might want this candidate. Only the
+        // decision below — whether it goes on screen — weighs priority.
+        guard insertIntoLyricsCandidatePool(lyrics, for: track) else {
+            return
+        }
         scheduleArtworkScoring(for: lyrics, against: track)
+
+        guard LyricsDisplayEligibilityPolicy.shouldReplaceDisplayed(
+            selectionIsPinned: candidateSelectionIsPinned,
+            candidateArrivedAfterPriorityWindow: lyrics.arrivedAfterPriorityWindow,
+            displayedIsRecovered: currentLyrics?.isFromSearchPlugin,
+            candidateIsRecovered: lyrics.isFromSearchPlugin,
+            candidateOutranksDisplayed: currentLyrics.map { lyricsHasHigherPriority(lyrics, over: $0) } ?? true
+        ) else {
+            return
+        }
+
+        currentLyrics = lyrics
+        lyricsCandidatePool.selectCandidate(identicalTo: lyrics)
+    }
+
+    // MARK: Lyrics Candidates
+
+    private func resetLyricsCandidatePool() {
+        candidateReplenishTask?.cancel()
+        candidateReplenishTask = nil
+        lyricsCandidatePool.removeAll()
+        candidateSelectionIsPinned = false
+        candidatePoolTrackId = nil
+    }
+
+    /// Makes `lyrics` the pool's only member, as the local-cache paths do —
+    /// they return before any search runs, so this one file is all there is
+    /// until a replenish search fills in the rest.
+    private func adoptAsSoleLyricsCandidate(_ lyrics: Lyrics) {
+        lyricsCandidatePool.replaceAll(with: [lyrics], selecting: lyrics)
+    }
+
+    /// Returns whether `lyrics` was taken into the pool. Rejects results that
+    /// belong to another track, and duplicates of a candidate already held —
+    /// different services routinely return the very same words, and switching
+    /// onto an identical copy reads as the shortcut being broken.
+    @discardableResult
+    private func insertIntoLyricsCandidatePool(_ lyrics: Lyrics, for track: MusicTrack) -> Bool {
+        guard candidatePoolTrackId == track.id else {
+            return false
+        }
+        let fingerprint = lyricsContentFingerprint(lyrics)
+        guard !lyricsCandidatePool.contains(where: { lyricsContentFingerprint($0) == fingerprint }) else {
+            return false
+        }
+        lyricsCandidatePool.insert(lyrics)
+        return true
+    }
+
+    /// Timed line content, which is what actually distinguishes one candidate
+    /// from another. Metadata is deliberately left out: the same words fetched
+    /// from two services differ in their tags but not in what the user reads.
+    private func lyricsContentFingerprint(_ lyrics: Lyrics) -> String {
+        lyrics.lines.map { "\($0.position)|\($0.content)" }.joined(separator: "\n")
+    }
+
+    /// Moves onto the next candidate for the current track, wrapping around at
+    /// the end. Reports what happened through `lyricsCandidateSwitchOutcomes`.
+    ///
+    /// Left non-isolated to match the rest of this type: `currentLyrics` and
+    /// friends are already reached from both `DispatchQueue.lyricsDisplay`
+    /// (track changes) and the main queue (search results, user actions).
+    func advanceToNextLyricsCandidate() {
+        guard let track = selectedPlayer.currentTrack else {
+            lyricsCandidateSwitchOutcomes.send(.unavailable)
+            return
+        }
+        guard lyricsCandidatePool.count >= 2, let nextCandidate = lyricsCandidatePool.advanceSelection() else {
+            startCandidateReplenishSearch(for: track)
+            return
+        }
+        applyUserPickedCandidate(nextCandidate, for: track)
+        lyricsCandidateSwitchOutcomes.send(.switched(
+            position: (lyricsCandidatePool.selectedIndex ?? 0) + 1,
+            total: lyricsCandidatePool.count,
+            service: nextCandidate.metadata.service
+        ))
+    }
+
+    /// The pool holds at most what is already on screen. That is the normal
+    /// state for a track served from the local cache — that path returns before
+    /// any search runs — so run one now to have something to switch to.
+    private func startCandidateReplenishSearch(for track: MusicTrack) {
+        guard candidateReplenishTask == nil else {
+            lyricsCandidateSwitchOutcomes.send(.searching)
+            return
+        }
+        candidatePoolTrackId = track.id
+        let onScreenLyrics = currentLyrics
+        if let onScreenLyrics, !lyricsCandidatePool.contains(where: { $0 === onScreenLyrics }) {
+            lyricsCandidatePool.insert(onScreenLyrics)
+            lyricsCandidatePool.selectCandidate(identicalTo: onScreenLyrics)
+        }
+        let onScreenFingerprint = onScreenLyrics.map(lyricsContentFingerprint)
+        let request = makeLyricsSearchRequest(for: track)
+        searchRequest = request
+        lyricsCandidateSwitchOutcomes.send(.searching)
+
+        candidateReplenishTask = Task { @MainActor in
+            defer { candidateReplenishTask = nil }
+            var hasSwitched = false
+            do {
+                for try await lyrics in lyricsManager.lyrics(for: request) {
+                    lyricsReceived(lyrics: lyrics)
+                    guard !hasSwitched,
+                          selectedPlayer.currentTrack?.id == track.id,
+                          let firstDifferentCandidate = lyricsCandidatePool.candidates.first(where: {
+                              lyricsContentFingerprint($0) != onScreenFingerprint
+                          }) else {
+                        continue
+                    }
+                    // Switch on the first genuinely different candidate rather
+                    // than waiting for the stream to drain: a full search can
+                    // run for tens of seconds, and a keystroke with nothing
+                    // visible happening reads as a dead shortcut.
+                    hasSwitched = true
+                    applyUserPickedCandidate(firstDifferentCandidate, for: track)
+                    lyricsCandidateSwitchOutcomes.send(.switched(
+                        position: (lyricsCandidatePool.selectedIndex ?? 0) + 1,
+                        total: lyricsCandidatePool.count,
+                        service: firstDifferentCandidate.metadata.service
+                    ))
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                log("Failed to fetch replenish candidates: \(error.localizedDescription)")
+            }
+            if !hasSwitched {
+                lyricsCandidateSwitchOutcomes.send(.exhausted)
+            }
+        }
+    }
+
+    /// Puts a hand-picked candidate on screen and makes it stick: pinned
+    /// against later arrivals, written to disk, and recorded so the next play
+    /// of this track resolves to it too.
+    private func applyUserPickedCandidate(_ lyrics: Lyrics, for track: MusicTrack) {
+        candidateSelectionIsPinned = true
+        lyricsCandidatePool.selectCandidate(identicalTo: lyrics)
+        lyrics.associateWithTrack(track)
+        lyrics.metadata.needsPersist = true
+        currentLyrics = lyrics
+
+        // Picking a candidate by hand contradicts any earlier "wrong lyrics"
+        // verdict on this track, exactly as choosing one in the search panel does.
+        if let index = defaults[.noSearchingTrackIds].firstIndex(of: track.id) {
+            defaults[.noSearchingTrackIds].remove(at: index)
+        }
+
+        if lyrics.persist() {
+            recordUserSelectionIfAutomaticLookupWouldOverrideIt(lyrics, for: track)
+        }
+        if defaults[.writeToiTunesAutomatically] {
+            writeToiTunes(overwrite: true)
+        }
+    }
+
+    /// Adopts a list the user already sorted through — the manual search panel's
+    /// results — so the shortcut carries on from what they picked there.
+    func adoptLyricsCandidates(_ candidates: [Lyrics], selecting selectedCandidate: Lyrics, for track: MusicTrack) {
+        candidatePoolTrackId = track.id
+        lyricsCandidatePool.replaceAll(with: candidates, selecting: selectedCandidate)
+        candidateSelectionIsPinned = true
+    }
+
+    private func userSelectedLyricsURL(forTrackId trackId: String) -> URL? {
+        LyricsSelectionOverrideTable
+            .filePath(forTrackId: trackId, in: defaults[.lyricsSelectionOverrides])
+            .map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Records the pick only when the automatic lookup order would otherwise
+    /// beat it — an embedded or beside-track file is consulted first, so
+    /// without this the choice would last exactly one play.
+    private func recordUserSelectionIfAutomaticLookupWouldOverrideIt(_ lyrics: Lyrics, for track: MusicTrack) {
+        guard let persistedURL = lyrics.metadata.localURL else {
+            return
+        }
+        guard defaults[.loadLyricsBesideTrack], automaticLookupPrecedes(persistedURL, for: track) else {
+            // Nothing is consulted ahead of the file just written, so the plain
+            // lookup order already resolves to it.
+            defaults[.lyricsSelectionOverrides] = LyricsSelectionOverrideTable.removing(
+                trackId: track.id,
+                from: defaults[.lyricsSelectionOverrides]
+            )
+            return
+        }
+        defaults[.lyricsSelectionOverrides] = LyricsSelectionOverrideTable.recording(
+            filePath: persistedURL.path,
+            forTrackId: track.id,
+            in: defaults[.lyricsSelectionOverrides],
+            at: Date()
+        )
+    }
+
+    private func automaticLookupPrecedes(_ persistedURL: URL, for track: MusicTrack) -> Bool {
+        if let embeddedLyrics = track.lyrics,
+           !embeddedLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        guard let besideTrackBaseURL = track.localFileURL?.deletingPathExtension() else {
+            return false
+        }
+        let besideTrackURLs = [
+            besideTrackBaseURL.appendingPathExtension("lrcx"),
+            besideTrackBaseURL.appendingPathExtension("lrc"),
+        ]
+        guard !besideTrackURLs.contains(persistedURL) else {
+            return false
+        }
+        return besideTrackURLs.contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func loadLyrics(at fileURL: URL, securityScopedURL: URL?, title: String, artist: String) -> Lyrics? {
+        if let securityScopedURL {
+            guard securityScopedURL.startAccessingSecurityScopedResource() else {
+                return nil
+            }
+        }
+        defer {
+            securityScopedURL?.stopAccessingSecurityScopedResource()
+        }
+        guard let fileContents = try? String(contentsOf: fileURL, encoding: String.Encoding.utf8),
+              let lyrics = Lyrics(fileContents) else {
+            return nil
+        }
+        lyrics.metadata.localURL = fileURL
+        lyrics.metadata.title = title
+        lyrics.metadata.artist = artist
+        lyrics.applyQQMusicKanaFurigana()
+        lyrics.filtrate()
+        lyrics.recognizeLanguage()
+        return lyrics
+    }
+
+    private func makeLyricsSearchRequest(for track: MusicTrack) -> LyricsSearchRequest {
+        let title = track.title ?? ""
+        let artist = track.artist ?? ""
+        // Strip bracketed suffixes ("(feat. X)", "[Explicit]", "(Remix)", "【现场版】" …)
+        // from the search title when the preference is on; providers usually return
+        // zero matches for the bracketed form. The full title still drives local
+        // cache lookup and the lyrics metadata association.
+        let searchTitle = defaults[.stripSearchTitleBracketsEnabled] ? title.strippingBrackets : title
+        return LyricsSearchRequest(
+            searchTerm: .info(title: searchTitle, artist: artist),
+            duration: track.duration ?? 0,
+            limit: 5,
+            userInfo: [:]
+        )
     }
 
     private func scheduleArtworkScoring(for lyrics: Lyrics, against track: MusicTrack) {
@@ -543,12 +823,22 @@ final class AppController: NSObject {
         // the score was computed against a now-stale artwork.
         guard selectedPlayer.currentTrack?.id == scoredTrackId else { return }
         lyrics.artworkMatchBonus = ArtworkSimilarityScorer.matchBonus
+        // The bonus changed this candidate's rank, so the pool has to be
+        // re-sorted; the selection stays on whatever object it was pointing at.
+        lyricsCandidatePool.resort()
+        // The user picked a candidate by hand; a score change must not move it.
+        guard !candidateSelectionIsPinned else { return }
+        // A bonus landing later cannot resurrect a result that already missed
+        // the priority window — otherwise late arrivals would take the screen
+        // through the artwork path that they are denied through the normal one.
+        guard !lyrics.arrivedAfterPriorityWindow else { return }
         // The lyrics may now outrank the current selection. Re-run the swap
         // check; lyricsReceived's own guards (request id, recovered/non-
         // recovered tier, strict match) still apply.
         if let current = currentLyrics, current !== lyrics,
            lyricsHasHigherPriority(lyrics, over: current) {
             currentLyrics = lyrics
+            lyricsCandidatePool.selectCandidate(identicalTo: lyrics)
         }
     }
 
@@ -716,6 +1006,9 @@ extension AppController {
         lrc.recognizeLanguage()
         lrc.metadata.needsPersist = true
         currentLyrics = lrc
+        // An imported file is as deliberate a choice as picking a candidate, so
+        // it takes over the pool and is pinned against a search still in flight.
+        adoptLyricsCandidates([lrc], selecting: lrc, for: track)
         if let index = defaults[.noSearchingTrackIds].firstIndex(of: track.id) {
             defaults[.noSearchingTrackIds].remove(at: index)
         }

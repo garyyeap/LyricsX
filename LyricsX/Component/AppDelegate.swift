@@ -1,5 +1,6 @@
 import AppKit
 import AppleMusicLyricsPanel
+import Combine
 import GenericID
 import LyricsXFoundation
 import MASShortcut
@@ -30,6 +31,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
     private var activeLyricsHUD: NSWindowController?
     private var lyricsHUDCloseObserver: NSObjectProtocol?
+
+    private var lyricsCandidateSwitchCancellable: AnyCancellable?
 
     private func openLyricsHUD() {
         // Create the Apple Music lyrics window lazily, only when actually
@@ -105,6 +108,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         )
 
         setupShortcuts()
+        observeLyricsCandidateSwitches()
 
         NSRunningApplication.runningApplications(withBundleIdentifier: lyricsXHelperIdentifier).forEach { $0.terminate() }
 
@@ -194,6 +198,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         binder.bindShortcut(.shortcutOffsetDecrease, to: #selector(decreaseOffset))
         binder.bindShortcut(.shortcutWriteToiTunes, to: #selector(writeToiTunes))
         binder.bindShortcut(.shortcutWrongLyrics, to: #selector(wrongLyrics))
+        binder.bindShortcut(.shortcutNextLyricsCandidate, to: #selector(nextLyricsCandidate))
         binder.bindShortcut(.shortcutSearchLyrics, to: #selector(searchLyrics))
         binder.bindShortcut(.shortcutTogglePreferences, to: #selector(togglePreferences))
     }
@@ -205,6 +210,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         case #selector(writeToiTunes(_:))?:
             return selectedPlayer.name == .appleMusic && AppController.shared.currentLyrics != nil
         case #selector(searchLyrics(_:))?:
+            return selectedPlayer.currentTrack != nil
+        case #selector(nextLyricsCandidate(_:))?:
             return selectedPlayer.currentTrack != nil
         default:
             return true
@@ -363,6 +370,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         }
         if !workspace.openFile(url.path, withApplication: "TextEdit") {
             NSSound.beep()
+        }
+    }
+
+    @IBAction func nextLyricsCandidate(_ sender: Any?) {
+        AppController.shared.advanceToNextLyricsCandidate()
+    }
+
+    /// The switch itself reports back asynchronously — the replenish path has to
+    /// finish a search first — so both paths are answered from one subscription
+    /// rather than from the action's return value.
+    private func observeLyricsCandidateSwitches() {
+        lyricsCandidateSwitchCancellable = AppController.shared.lyricsCandidateSwitchOutcomes
+            .receive(on: DispatchQueue.main)
+            .sink { outcome in
+                Task { @MainActor in
+                    guard let message = AppDelegate.message(for: outcome) else {
+                        NSSound.beep()
+                        return
+                    }
+                    TransientMessageWindowController.shared.present(message: message)
+                }
+            }
+    }
+
+    private static func message(for outcome: LyricsCandidateSwitchOutcome) -> String? {
+        switch outcome {
+        case .switched(let position, let total, let service):
+            guard let service, !service.isEmpty else {
+                let format = NSLocalizedString("Lyrics %1$d of %2$d", comment: "Transient message after switching to another lyrics candidate, when the source is unknown. %1$d is the 1-based position, %2$d the number of candidates.")
+                return String(format: format, position, total)
+            }
+            let format = NSLocalizedString("Lyrics %1$d of %2$d · %3$@", comment: "Transient message after switching to another lyrics candidate. %1$d is the 1-based position, %2$d the number of candidates, %3$@ the lyrics source name.")
+            return String(format: format, position, total, service)
+        case .searching:
+            return NSLocalizedString("Searching for other lyrics…", comment: "Transient message shown when the next-candidate shortcut has to run a search first, because nothing else was in the pool.")
+        case .exhausted:
+            return NSLocalizedString("No other lyrics found", comment: "Transient message shown when a search for other lyrics candidates turned up nothing but what is already displayed.")
+        case .unavailable:
+            return nil
         }
     }
 

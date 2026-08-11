@@ -833,6 +833,40 @@
         }
       }
     },
+    "Lyrics %1$d of %2$d" : {
+      "comment" : "Transient message after switching to another lyrics candidate, when the source is unknown. %1$d is the 1-based position, %2$d the number of candidates.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$d 条歌词，共 %2$d 条"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$d 條歌詞，共 %2$d 條"
+          }
+        }
+      }
+    },
+    "Lyrics %1$d of %2$d · %3$@" : {
+      "comment" : "Transient message after switching to another lyrics candidate. %1$d is the 1-based position, %2$d the number of candidates, %3$@ the lyrics source name.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$d 条歌词，共 %2$d 条 · %3$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$d 條歌詞，共 %2$d 條 · %3$@"
+          }
+        }
+      }
+    },
     "Lyrics Window" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1239,6 +1273,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有歌詞"
+          }
+        }
+      }
+    },
+    "No other lyrics found" : {
+      "comment" : "Transient message shown when a search for other lyrics candidates turned up nothing but what is already displayed.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有找到其他歌词"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有找到其他歌詞"
           }
         }
       }
@@ -2172,6 +2223,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜尋歌詞"
+          }
+        }
+      }
+    },
+    "Searching for other lyrics…" : {
+      "comment" : "Transient message shown when the next-candidate shortcut has to run a search first, because nothing else was in the pool.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜索其他歌词…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搜尋其他歌詞…"
           }
         }
       }

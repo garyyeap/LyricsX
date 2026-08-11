@@ -9967,6 +9967,36 @@
         }
       }
     },
+    "nlc-Tc-l01.title" : {
+      "comment" : "Class = \"NSTextFieldCell\"; title = \"Switch to next lyrics candidate:\"; ObjectID = \"nlc-Tc-l01\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to next lyrics candidate:"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Switch to next lyrics candidate:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到下一条候选歌词:"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切換到下一條候選歌詞:"
+          }
+        }
+      }
+    },
     "NLl-9L-0gZ.title" : {
       "comment" : "Class = \"NSButtonCell\"; title = \"Music is not playing\"; ObjectID = \"NLl-9L-0gZ\";",
       "extractionState" : "extracted_with_value",
