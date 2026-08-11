@@ -35,9 +35,10 @@ hand.
 
 `LyricsXPackage` has two suites. `LyricsXFoundationTests` covers the pure
 policies — lyrics storage destinations, editing eligibility, HUD window
-configuration, playback-position preservation, candidate-pool ordering, and the
-manual-selection override table — and is fast and headless enough to run on
-every change. `AppleMusicLyricsPanelTests` is a real probe suite that
+configuration, playback-position preservation, candidate-pool ordering, the
+manual-selection override table, and the source-ordering modes (including the
+property tests that keep the ordering transitive) — and is fast and headless
+enough to run on every change. `AppleMusicLyricsPanelTests` is a real probe suite that
 renders the Apple Music lyrics engine offscreen through `CARenderer` and asserts
 its animation geometry and karaoke colour (no clipping, bounded lift, sweep
 actually paints white, no position drift):

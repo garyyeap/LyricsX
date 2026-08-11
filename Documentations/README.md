@@ -20,10 +20,13 @@
 
 - [歌词候选池](Internal/LyricsCandidatePool.md) —— 自动搜索为什么改成「擂台赛 + 完整名单」，
   「钉住」为什么不能省，以及用户选定的歌词靠什么活过下一次播放。
+- [歌词候选的排序](Internal/LyricsSourceOrdering.md) —— 为什么用分数分桶而不是比分差
+  （传递性），偏好迁移为什么必须跑在 `register(defaults:)` 之前。
 
 ## 术语
 
-- [项目术语表](Glossary.md) —— 候选池、钉住、补充搜索、覆盖表、优先级窗口、Route B 等本项目自造词。
+- [项目术语表](Glossary.md) —— 候选池、钉住、补充搜索、覆盖表、优先级窗口、Route B、
+  分数桶、同分容差等本项目自造词。
 
 ## 工程实践
 

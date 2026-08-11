@@ -11,4 +11,4 @@
 |---|------|------|
 | [0001](0001-next-lyrics-candidate.md) | 切换到下一条歌词候选 | Implemented |
 | [0002](0002-always-ignore-cached-lyrics.md) | 总是忽略歌词库缓存 | Draft |
-| [0003](0003-source-ordering-modes.md) | 歌词源排序模式：分数优先，同分再看源 | Draft |
+| [0003](0003-source-ordering-modes.md) | 歌词源排序模式：分数优先，同分再看源 | Implemented |

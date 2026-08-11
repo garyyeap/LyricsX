@@ -1918,22 +1918,42 @@
             <objects>
                 <viewController title="Source" id="KTZ-mJ-lpY" customClass="PreferenceSourceViewController" customModule="LyricsX" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" misplaced="YES" id="Bkt-jy-GD5">
-                        <rect key="frame" x="0.0" y="0.0" width="200" height="440"/>
+                        <rect key="frame" x="0.0" y="0.0" width="200" height="484"/>
                         <autoresizingMask key="autoresizingMask"/>
                         <subviews>
-                            <button verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="Rs6-hk-kzP">
-                                <rect key="frame" x="20" y="384" width="163" height="32"/>
-                                <buttonCell key="cell" type="check" title="Enable source priority ranking" bezelStyle="regularSquare" imagePosition="left" state="on" inset="2" id="au8-ou-Duf">
+                            <button verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-q01" userLabel="Rank by quality only">
+                                <rect key="frame" x="20" y="444" width="163" height="16"/>
+                                <buttonCell key="cell" type="radio" title="Rank by match score only" bezelStyle="regularSquare" imagePosition="left" alignment="left" state="on" inset="2" id="sop-Bc-q02">
                                     <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                     <font key="font" metaFont="system"/>
                                 </buttonCell>
                                 <connections>
-                                    <action selector="toggleSourcePriority:" target="KTZ-mJ-lpY" id="3S7-On-Gfb"/>
+                                    <action selector="chooseSourceOrderingMode:" target="KTZ-mJ-lpY" id="sop-Ac-q03"/>
+                                </connections>
+                            </button>
+                            <button tag="1" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-s01" userLabel="Rank by source first">
+                                <rect key="frame" x="20" y="422" width="163" height="16"/>
+                                <buttonCell key="cell" type="radio" title="Rank by source order first" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="sop-Bc-s02">
+                                    <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                    <font key="font" metaFont="system"/>
+                                </buttonCell>
+                                <connections>
+                                    <action selector="chooseSourceOrderingMode:" target="KTZ-mJ-lpY" id="sop-Ac-s03"/>
+                                </connections>
+                            </button>
+                            <button tag="2" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-t01" userLabel="Rank by quality, source breaks ties">
+                                <rect key="frame" x="20" y="400" width="163" height="16"/>
+                                <buttonCell key="cell" type="radio" title="Rank by match score, break ties by source order" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="sop-Bc-t02">
+                                    <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                    <font key="font" metaFont="system"/>
+                                </buttonCell>
+                                <connections>
+                                    <action selector="chooseSourceOrderingMode:" target="KTZ-mJ-lpY" id="sop-Ac-t03"/>
                                 </connections>
                             </button>
                             <textField focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" translatesAutoresizingMaskIntoConstraints="NO" id="eMr-xF-JY5">
-                                <rect key="frame" x="18" y="340" width="167" height="36"/>
-                                <textFieldCell key="cell" sendsActionOnEndEditing="YES" title="Drag rows to reorder source priority. If disabled, it will be sorted by quality." id="e8O-oC-igZ">
+                                <rect key="frame" x="18" y="356" width="167" height="36"/>
+                                <textFieldCell key="cell" sendsActionOnEndEditing="YES" title="Drag rows to reorder source priority. Scores within 0.02 of each other count as tied." id="sop-Tc-d01">
                                     <font key="font" size="11" name="HelveticaNeue"/>
                                     <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                     <color key="backgroundColor" name="controlColor" catalog="System" colorSpace="catalog"/>
@@ -2053,19 +2073,27 @@
                         </subviews>
                         <constraints>
                             <constraint firstItem="TcY-l7-0hN" firstAttribute="leading" secondItem="Bkt-jy-GD5" secondAttribute="leading" constant="20" id="0Sk-4v-jVW"/>
-                            <constraint firstItem="Rs6-hk-kzP" firstAttribute="leading" secondItem="Bkt-jy-GD5" secondAttribute="leading" constant="20" id="2cw-DD-lDi"/>
+                            <constraint firstItem="sop-Bt-q01" firstAttribute="leading" secondItem="Bkt-jy-GD5" secondAttribute="leading" constant="20" id="2cw-DD-lDi"/>
                             <constraint firstAttribute="trailing" secondItem="TcY-l7-0hN" secondAttribute="trailing" constant="20" id="2mo-Nh-pkR"/>
-                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="Rs6-hk-kzP" secondAttribute="trailing" constant="20" id="7B9-GI-7yz"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-q01" secondAttribute="trailing" constant="20" id="7B9-GI-7yz"/>
                             <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="eMr-xF-JY5" secondAttribute="trailing" constant="20" id="Nvu-Eg-xwe"/>
                             <constraint firstAttribute="bottom" secondItem="TcY-l7-0hN" secondAttribute="bottom" constant="24" id="Q5D-XX-2sF"/>
-                            <constraint firstItem="eMr-xF-JY5" firstAttribute="top" secondItem="Rs6-hk-kzP" secondAttribute="bottom" constant="8" id="hYH-P6-g1p"/>
-                            <constraint firstItem="eMr-xF-JY5" firstAttribute="leading" secondItem="Rs6-hk-kzP" secondAttribute="leading" id="op1-11-sKa"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-s01" secondAttribute="trailing" constant="20" id="sop-Cn-s04"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-t01" secondAttribute="trailing" constant="20" id="sop-Cn-t04"/>
+                            <constraint firstItem="sop-Bt-s01" firstAttribute="top" secondItem="sop-Bt-q01" secondAttribute="bottom" constant="6" id="sop-Cn-s05"/>
+                            <constraint firstItem="sop-Bt-s01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-s06"/>
+                            <constraint firstItem="sop-Bt-t01" firstAttribute="top" secondItem="sop-Bt-s01" secondAttribute="bottom" constant="6" id="sop-Cn-t05"/>
+                            <constraint firstItem="sop-Bt-t01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-t06"/>
+                            <constraint firstItem="eMr-xF-JY5" firstAttribute="top" secondItem="sop-Bt-t01" secondAttribute="bottom" constant="8" id="hYH-P6-g1p"/>
+                            <constraint firstItem="eMr-xF-JY5" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="op1-11-sKa"/>
                             <constraint firstItem="TcY-l7-0hN" firstAttribute="top" secondItem="eMr-xF-JY5" secondAttribute="bottom" constant="16" id="qK9-My-pei"/>
-                            <constraint firstItem="Rs6-hk-kzP" firstAttribute="top" secondItem="Bkt-jy-GD5" secondAttribute="top" constant="24" id="ztn-mE-wra"/>
+                            <constraint firstItem="sop-Bt-q01" firstAttribute="top" secondItem="Bkt-jy-GD5" secondAttribute="top" constant="24" id="ztn-mE-wra"/>
                         </constraints>
                     </view>
                     <connections>
-                        <outlet property="enableSourcePriorityButton" destination="Rs6-hk-kzP" id="kuj-nf-VT6"/>
+                        <outlet property="orderByQualityFirstSourceTieBreakButton" destination="sop-Bt-t01" id="sop-Ol-t07"/>
+                        <outlet property="orderByQualityOnlyButton" destination="sop-Bt-q01" id="sop-Ol-q07"/>
+                        <outlet property="orderBySourceFirstButton" destination="sop-Bt-s01" id="sop-Ol-s07"/>
                         <outlet property="sourceTableView" destination="gXu-L7-amu" id="hq1-0v-D7c"/>
                     </connections>
                 </viewController>

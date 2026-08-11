@@ -195,7 +195,12 @@ extension UserDefaults.DefaultsKeys {
     static let appleMusicLyricsWindowPinned = Key<Bool>("AppleMusicLyricsWindowPinned")
 
     // Source Priority
+    /// Superseded by `lyricsSourceOrderingMode`, which `UserDefaultsMigrator`
+    /// seeds from it once. Kept readable so downgrading to an older build still
+    /// finds the user's setting.
     static let lyricsSourcePriorityEnabled = Key<Bool>("LyricsSourcePriorityEnabled")
+    /// A `LyricsSourceOrderingMode` raw value.
+    static let lyricsSourceOrderingMode = Key<Int>("LyricsSourceOrderingMode")
     static let lyricsSourcePriorityOrder = Key<[String]>("LyricsSourcePriorityOrder")
     static let lyricsPriorityWindow = Key<Double>("LyricsPriorityWindow")
 
@@ -251,29 +256,46 @@ extension Lyrics {
     }
 }
 
+var lyricsSourceOrderingMode: LyricsSourceOrderingMode {
+    LyricsSourceOrderingMode(storedRawValue: defaults[.lyricsSourceOrderingMode])
+}
+
 func lyricsHasHigherPriority(_ new: Lyrics, over existing: Lyrics) -> Bool {
-    if defaults[.lyricsSourcePriorityEnabled] {
-        let sourceOrder = defaults[.lyricsSourcePriorityOrder] ?? []
-        let normalizedOrder = sourceOrder.map { $0.lowercased() }
-
-        let existingSource = (existing.metadata.service ?? "").lowercased()
-        let newSource = (new.metadata.service ?? "").lowercased()
-
-        let existingIndex = normalizedOrder.firstIndex(of: existingSource) ?? Int.max
-        let newIndex = normalizedOrder.firstIndex(of: newSource) ?? Int.max
-
-        if existingIndex != newIndex {
-            return newIndex < existingIndex
-        }
+    let mode = lyricsSourceOrderingMode
+    // Resolving a source index means lowercasing the whole preference list, so
+    // skip it in the one mode that never looks at it. Equal indices make every
+    // source-based test fall through to quality, which is what that mode wants.
+    let newSourceIndex: Int
+    let existingSourceIndex: Int
+    if mode.usesSourcePriorityOrder {
+        let normalizedOrder = (defaults[.lyricsSourcePriorityOrder] ?? []).map { $0.lowercased() }
+        newSourceIndex = sourcePriorityIndex(of: new, in: normalizedOrder)
+        existingSourceIndex = sourcePriorityIndex(of: existing, in: normalizedOrder)
+    } else {
+        newSourceIndex = LyricsSourceOrderingPolicy.unlistedSourceIndex
+        existingSourceIndex = LyricsSourceOrderingPolicy.unlistedSourceIndex
     }
 
-    // NaN compares false against everything, which used to make the insertion
-    // search in `firstIndex(where:)` always fall through and append — defeating
-    // any quality-based ordering. Treat NaN as zero so a stray bug in the
-    // upstream scorer can never silently reduce sorting to arrival order.
-    let newQuality = (new.quality.isFinite ? new.quality : 0) + effectiveArtworkBonus(new)
-    let existingQuality = (existing.quality.isFinite ? existing.quality : 0) + effectiveArtworkBonus(existing)
-    return newQuality > existingQuality
+    return LyricsSourceOrderingPolicy.hasHigherPriority(
+        candidateQuality: effectiveQuality(new),
+        candidateSourceIndex: newSourceIndex,
+        comparedToQuality: effectiveQuality(existing),
+        comparedToSourceIndex: existingSourceIndex,
+        mode: mode
+    )
+}
+
+private func sourcePriorityIndex(of lyrics: Lyrics, in normalizedOrder: [String]) -> Int {
+    let source = (lyrics.metadata.service ?? "").lowercased()
+    return normalizedOrder.firstIndex(of: source) ?? LyricsSourceOrderingPolicy.unlistedSourceIndex
+}
+
+private func effectiveQuality(_ lyrics: Lyrics) -> Double {
+    // Normalise here rather than leaning on the policy's own guard: NaN would
+    // poison the sum, and the policy would then discard the artwork bonus along
+    // with it.
+    let quality = lyrics.quality.isFinite ? lyrics.quality : 0
+    return quality + effectiveArtworkBonus(lyrics)
 }
 
 private func effectiveArtworkBonus(_ lyrics: Lyrics) -> Double {

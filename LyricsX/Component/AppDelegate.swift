@@ -83,6 +83,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         UserDefaultsMigrator.shared.migrateFromSandboxIfNeeded()
+        // Both migrations read raw persisted values, so they have to run before
+        // `register(defaults:)` puts fallbacks in front of them.
+        UserDefaultsMigrator.shared.migrateSourceOrderingModeIfNeeded()
         registerUserDefaults()
 
         let controller = AppController.shared

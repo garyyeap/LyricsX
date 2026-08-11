@@ -2,18 +2,29 @@ import AppKit
 import LyricsXFoundation
 
 class PreferenceSourceViewController: PreferenceViewController {
-    @IBOutlet var enableSourcePriorityButton: NSButton!
+    /// The three buttons are wired as one radio group through their shared
+    /// action; each carries its `LyricsSourceOrderingMode` raw value as its tag.
+    @IBOutlet var orderByQualityOnlyButton: NSButton!
+    @IBOutlet var orderBySourceFirstButton: NSButton!
+    @IBOutlet var orderByQualityFirstSourceTieBreakButton: NSButton!
     @IBOutlet var sourceTableView: NSTableView!
 
     private var availableSources: [String] = []
     private var sourcePriorityOrder: [String] = []
+
+    private var orderingModeButtons: [NSButton] {
+        [
+            orderByQualityOnlyButton,
+            orderBySourceFirstButton,
+            orderByQualityFirstSourceTieBreakButton,
+        ]
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         availableSources = LyricsProviders.ServiceID.allCases.map(\.displayName)
 
-        enableSourcePriorityButton.state = defaults[.lyricsSourcePriorityEnabled] ? .on : .off
         sourcePriorityOrder = defaults[.lyricsSourcePriorityOrder] ?? availableSources
         for source in availableSources {
             if !sourcePriorityOrder.contains(source) {
@@ -29,15 +40,24 @@ class PreferenceSourceViewController: PreferenceViewController {
         updateUI()
     }
 
-    @IBAction func toggleSourcePriority(_ sender: NSButton) {
-        let enabled = sender.state == .on
-        defaults[.lyricsSourcePriorityEnabled] = enabled
+    @IBAction func chooseSourceOrderingMode(_ sender: NSButton) {
+        let mode = LyricsSourceOrderingMode(storedRawValue: sender.tag)
+        defaults[.lyricsSourceOrderingMode] = mode.rawValue
+        // Keep the superseded checkbox key in step so downgrading to a build
+        // that still reads it lands on the nearest equivalent. The new
+        // tie-break mode has no legacy spelling; mapping it to "off" is the
+        // closer of the two, since quality decides there as well.
+        defaults[.lyricsSourcePriorityEnabled] = mode == .sourceFirst
         updateUI()
     }
 
     private func updateUI() {
-        sourceTableView.isEnabled = defaults[.lyricsSourcePriorityEnabled]
-        sourceTableView.alphaValue = defaults[.lyricsSourcePriorityEnabled] ? 1.0 : 0.5
+        let mode = lyricsSourceOrderingMode
+        for button in orderingModeButtons {
+            button.state = button.tag == mode.rawValue ? .on : .off
+        }
+        sourceTableView.isEnabled = mode.usesSourcePriorityOrder
+        sourceTableView.alphaValue = mode.usesSourcePriorityOrder ? 1.0 : 0.5
     }
 
     private func savePriorityOrder() {

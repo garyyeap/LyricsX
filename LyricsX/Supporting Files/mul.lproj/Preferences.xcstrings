@@ -3013,120 +3013,6 @@
         }
       }
     },
-    "au8-ou-Duf.title" : {
-      "comment" : "Class = \"NSButtonCell\"; title = \"Enable source priority ranking\"; ObjectID = \"au8-ou-Duf\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "تفعيل ترتيب المصادر حسب الأولوية"
-          }
-        },
-        "base" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enable source priority ranking"
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rangfolge nach Quellenpriorität aktivieren"
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Enable source priority ranking"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Activar clasificación por prioridad de fuente"
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "فعال‌سازی رتبه‌بندی اولویت منابع"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Activer le classement par priorité des sources"
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aktifkan peringkat prioritas sumber"
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Abilita ordinamento per priorità delle fonti"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取得元の優先順位を有効にする"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "출처 우선 순위 순서 활성화"
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Rangschikking op bronprioriteit inschakelen"
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Włącz ranking priorytetów źródeł"
-          }
-        },
-        "pt" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ativar classificação por prioridade da fonte"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Включить ранжирование источников по приоритету"
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Увімкнути ранжування джерел за пріоритетом"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "启用歌词源优先级排序"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "啟用歌詞源優先級排序"
-          }
-        }
-      }
-    },
     "aUg-eg-K5C.label" : {
       "comment" : "Class = \"NSTabViewItem\"; label = \"Karaoke\"; ObjectID = \"aUg-eg-K5C\";",
       "extractionState" : "extracted_with_value",
@@ -4467,120 +4353,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一般"
-          }
-        }
-      }
-    },
-    "e8O-oC-igZ.title" : {
-      "comment" : "Class = \"NSTextFieldCell\"; title = \"Drag rows to reorder source priority. If disabled, it will be sorted by quality.\"; ObjectID = \"e8O-oC-igZ\";",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "ar" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "اسحب الصفوف لإعادة ترتيب أولوية المصدر. إذا تم تعطيله، سيتم الترتيب حسب الجودة."
-          }
-        },
-        "base" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Drag rows to reorder source priority. If disabled, it will be sorted by quality."
-          }
-        },
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zeilen ziehen, um die Quellenpriorität neu anzuordnen. Wenn deaktiviert, wird nach Qualität sortiert."
-          }
-        },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Drag rows to reorder source priority. If disabled, it will be sorted by quality."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arrastra las filas para reordenar la prioridad de la fuente. Si está desactivado, se ordenará por calidad."
-          }
-        },
-        "fa" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "برای ترتیب مجدد اولویت منابع، سطرها را بکشید. در صورت غیرفعال بودن، بر اساس کیفیت مرتب خواهد شد."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Faites glisser les lignes pour réorganiser la priorité des sources. Si désactivé, le tri se fera par qualité."
-          }
-        },
-        "id" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Seret baris untuk menyusun ulang prioritas sumber. Jika dinonaktifkan, akan diurutkan berdasarkan kualitas."
-          }
-        },
-        "it" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Trascina le righe per riordinare la priorità delle fonti. Se disabilitato, l'ordinamento avverrà per qualità."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "行をドラッグして取得元の優先順位を変更します。無効の場合、品質順でソートされます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "행을 드래그하여 출처 우선 순위를 변경하세요. 비활성화 시 품질 순으로 정렬됩니다."
-          }
-        },
-        "nl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sleep rijen om de bronprioriteit opnieuw te rangschikken. Indien uitgeschakeld, wordt er op kwaliteit gesorteerd."
-          }
-        },
-        "pl" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Przeciągnij wiersze, aby zmienić kolejność priorytetów źródeł. Jeśli opcja jest wyłączona, sortowanie odbędzie się według jakości."
-          }
-        },
-        "pt" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Arraste as linhas para reordenar a prioridade da fonte. Se desativado, será ordenado por qualidade."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Перетаскивайте строки, чтобы изменить приоритет источников. Если отключено, сортировка будет по качеству."
-          }
-        },
-        "uk" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Перетягуйте рядки, щоб змінити пріоритет джерел. Якщо вимкнено, сортування відбуватиметься за якістю."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "拖动以重新排序歌词源优先级。若关闭该功能则按照质量排序。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可拖動調整歌詞來源的優先順序。停用時，則依照歌詞品質排列。"
           }
         }
       }
@@ -11815,6 +11587,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "全體歌詞時間軸偏移 (ms)："
+          }
+        }
+      }
+    },
+    "sop-Bc-q02.title" : {
+      "comment" : "Class = \"NSButtonCell\"; title = \"Rank by match score only\"; ObjectID = \"sop-Bc-q02\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rank by match score only"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Rank by match score only"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅按匹配分数排序"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅按匹配分數排序"
+          }
+        }
+      }
+    },
+    "sop-Bc-s02.title" : {
+      "comment" : "Class = \"NSButtonCell\"; title = \"Rank by source order first\"; ObjectID = \"sop-Bc-s02\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rank by source order first"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Rank by source order first"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "优先按歌词源顺序排序"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "優先按歌詞源順序排序"
+          }
+        }
+      }
+    },
+    "sop-Bc-t02.title" : {
+      "comment" : "Class = \"NSButtonCell\"; title = \"Rank by match score, break ties by source order\"; ObjectID = \"sop-Bc-t02\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rank by match score, break ties by source order"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Rank by match score, break ties by source order"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按匹配分数排序，同分时按歌词源顺序"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按匹配分數排序，同分時按歌詞源順序"
+          }
+        }
+      }
+    },
+    "sop-Tc-d01.title" : {
+      "comment" : "Class = \"NSTextFieldCell\"; title = \"Drag rows to reorder source priority. Scores within 0.02 of each other count as tied.\"; ObjectID = \"sop-Tc-d01\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag rows to reorder source priority. Scores within 0.02 of each other count as tied."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Drag rows to reorder source priority. Scores within 0.02 of each other count as tied."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖动以重新排序歌词源优先级。分数相差 0.02 以内视为同分。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖動以重新排序歌詞來源的優先順序。分數相差 0.02 以內視為同分。"
           }
         }
       }
