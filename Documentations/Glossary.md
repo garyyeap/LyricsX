@@ -61,6 +61,17 @@ Apple Music 曲目本地化名恢复：先拿到曲目的原文（母语）名�
 「能不能上屏」的完整判定 —— 钉住、迟到、Route B 分层、质量比较 —— 集中在
 `LyricsDisplayEligibilityPolicy`。改上屏规则请改那里，不要在 `AppController` 里另开分支。
 
+## 歌词库缓存（lyrics library cache）
+
+LyricsX **自己**保存歌词的那个目录（默认 `~/Music/LyricsX/`，或用户自定义路径）里的文件。
+
+**「缓存」只指这一层。** 内嵌歌词和 beside-track 歌词同样是本地文件，但它们是**用户的**资产，
+不是缓存 —— 这条分界正是 `IgnoreCachedLyricsLibrary` 开关的作用范围
+（详见 [绕过歌词库缓存](Internal/LyricsLibraryCacheBypass.md)）。
+
+缓存命中会让 `currentTrackChanged` 直接返回、一次网络请求都不发，所以库里存错的文件
+**永远不会自我修复**。
+
 ## 分数桶（quality bucket）
 
 把匹配分数量化到固定网格后的整数：`floor(分数 / 同分容差)`。

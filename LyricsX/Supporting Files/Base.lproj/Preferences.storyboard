@@ -67,11 +67,11 @@
             <objects>
                 <viewController title="General" id="GaA-xG-8SL" userLabel="General" customClass="PreferenceGeneralViewController" customModule="LyricsX" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" id="Bzr-sv-FuP">
-                        <rect key="frame" x="0.0" y="0.0" width="611" height="676"/>
+                        <rect key="frame" x="0.0" y="0.0" width="611" height="744"/>
                         <autoresizingMask key="autoresizingMask"/>
                         <subviews>
                             <box title="Preferred music player" translatesAutoresizingMaskIntoConstraints="NO" id="FxG-RK-g7y">
-                                <rect key="frame" x="20" y="546" width="571" height="106"/>
+                                <rect key="frame" x="20" y="614" width="571" height="106"/>
                                 <view key="contentView" id="Mdd-yA-dBT">
                                     <rect key="frame" x="0.0" y="0.0" width="571" height="94"/>
                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
@@ -304,10 +304,12 @@
                                 </view>
                             </box>
                             <gridView xPlacement="leading" yPlacement="bottom" rowAlignment="none" translatesAutoresizingMaskIntoConstraints="NO" id="hBJ-hq-S4u">
-                                <rect key="frame" x="20" y="20" width="571" height="516"/>
+                                <rect key="frame" x="20" y="20" width="571" height="584"/>
                                 <rows>
                                     <gridRow yPlacement="center" height="30" id="5do-X5-xgX"/>
                                     <gridRow yPlacement="center" height="30" id="Nkw-LC-Lbi"/>
+                                    <gridRow yPlacement="center" height="20" id="icl-cb-rOw"/>
+                                    <gridRow yPlacement="top" height="48" id="icl-ex-rOw"/>
                                     <gridRow yPlacement="top" height="20" id="bYQ-nJ-Ce7"/>
                                     <gridRow yPlacement="top" height="20" id="writeBackBeside-row"/>
                                     <gridRow yPlacement="center" height="30" id="1nK-QJ-9q8"/>
@@ -419,6 +421,34 @@
                                                 <real value="3.4028234663852886e+38"/>
                                             </customSpacing>
                                         </stackView>
+                                    </gridCell>
+                                    <gridCell row="icl-cb-rOw" column="3Hg-Ka-QrM" id="icl-cb-cLh"/>
+                                    <gridCell row="icl-cb-rOw" column="IfN-lq-biT" id="icl-cb-cRh">
+                                        <button key="contentView" verticalHuggingPriority="1000" translatesAutoresizingMaskIntoConstraints="NO" id="icl-cb-Btn">
+                                            <rect key="frame" x="217" y="428" width="354" height="16"/>
+                                            <buttonCell key="cell" type="check" title="Always ignore saved lyrics and search again" bezelStyle="regularSquare" imagePosition="left" inset="2" id="icl-cb-bCl">
+                                                <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
+                                                <font key="font" metaFont="system"/>
+                                            </buttonCell>
+                                            <connections>
+                                                <binding destination="968-l4-9l5" name="value" keyPath="values.IgnoreCachedLyricsLibrary" id="icl-cb-bnd">
+                                                    <dictionary key="options">
+                                                        <bool key="NSConditionallySetsEnabled" value="NO"/>
+                                                    </dictionary>
+                                                </binding>
+                                            </connections>
+                                        </button>
+                                    </gridCell>
+                                    <gridCell row="icl-ex-rOw" column="3Hg-Ka-QrM" id="icl-ex-cLh"/>
+                                    <gridCell row="icl-ex-rOw" column="IfN-lq-biT" id="icl-ex-cRh">
+                                        <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="icl-ex-tFd">
+                                            <rect key="frame" x="215" y="380" width="358" height="44"/>
+                                            <textFieldCell key="cell" title="Skips only lyrics LyricsX saved itself, not embedded or beside-track files. Used anyway when a search finds nothing." id="icl-ex-tCl">
+                                                <font key="font" metaFont="system"/>
+                                                <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
+                                                <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
+                                            </textFieldCell>
+                                        </textField>
                                     </gridCell>
                                     <gridCell row="bYQ-nJ-Ce7" column="3Hg-Ka-QrM" id="9RI-Dt-f9i"/>
                                     <gridCell row="bYQ-nJ-Ce7" column="IfN-lq-biT" id="s58-Z9-B82">

@@ -422,7 +422,7 @@ final class AppController: NSObject {
             return
         }
 
-        var candidateLyricsURL: [(URL, Bool, Bool)] = [] // (fileURL, isSecurityScoped, needsSearching)
+        var candidateLyricsFiles: [LyricsLookupCandidateFile] = []
 
         if defaults[.loadLyricsBesideTrack] {
             if let embeddedLyrics = track.lyrics, !embeddedLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -441,33 +441,39 @@ final class AppController: NSObject {
                     return
                 }
             }
-            if let fileName = track.localFileURL?.deletingPathExtension() {
-                candidateLyricsURL += [
-                    (fileName.appendingPathExtension("lrcx"), false, false),
-                    (fileName.appendingPathExtension("lrc"), false, false),
+            if let besideTrackBaseURL = track.localFileURL?.deletingPathExtension() {
+                candidateLyricsFiles += [
+                    LyricsLookupCandidateFile(
+                        fileURL: besideTrackBaseURL.appendingPathExtension("lrcx"),
+                        isSecurityScoped: false,
+                        allowsFurtherSearching: false
+                    ),
+                    LyricsLookupCandidateFile(
+                        fileURL: besideTrackBaseURL.appendingPathExtension("lrc"),
+                        isSecurityScoped: false,
+                        allowsFurtherSearching: false
+                    ),
                 ]
             }
         }
 
-        let (url, security) = defaults.lyricsSavingPath()
-        let titleForReading = title.replacingOccurrences(of: "/", with: ":")
-        let artistForReading = artist.replacingOccurrences(of: "/", with: ":")
-        let fileName = url.appendingPathComponent("\(titleForReading) - \(artistForReading)")
-        candidateLyricsURL += [
-            (fileName.appendingPathExtension("lrcx"), security, false),
-            (fileName.appendingPathExtension("lrc"), security, true),
-        ]
+        // The library is the only layer the "ignore saved lyrics" switch covers:
+        // everything above is either the user's own file or the user's own
+        // choice, and neither is a cache to be bypassed.
+        if !defaults[.ignoreCachedLyricsLibrary] {
+            candidateLyricsFiles += librarySearchFiles(title: title, artist: artist)
+        }
 
-        for (url, security, needsSearching) in candidateLyricsURL {
+        for candidateFile in candidateLyricsFiles {
             if let lyrics = loadLyrics(
-                at: url,
-                securityScopedURL: security ? url : nil,
+                at: candidateFile.fileURL,
+                securityScopedURL: candidateFile.isSecurityScoped ? candidateFile.fileURL : nil,
                 title: title,
                 artist: artist
             ) {
                 currentLyrics = lyrics
                 adoptAsSoleLyricsCandidate(lyrics)
-                if needsSearching {
+                if candidateFile.allowsFurtherSearching {
                     break
                 } else {
                     return
@@ -515,6 +521,8 @@ final class AppController: NSObject {
                     lyricsReceived(lyrics: lyrics)
                 }
 
+                loadLibraryLyricsIfSearchFoundNothing(for: track, title: title, artist: artist)
+
                 if defaults[.writeToiTunesAutomatically] {
                     writeToiTunes(overwrite: true)
                 }
@@ -522,6 +530,74 @@ final class AppController: NSObject {
                 // Search was cancelled due to track change
             } catch {
                 print("Failed to fetch lyrics: \(error.localizedDescription)")
+                // The case the fallback exists for: every provider failed, which
+                // offline is the normal outcome rather than the exception.
+                loadLibraryLyricsIfSearchFoundNothing(for: track, title: title, artist: artist)
+            }
+        }
+    }
+
+    /// One file an automatic lookup may read, and what reading it implies.
+    private struct LyricsLookupCandidateFile {
+        let fileURL: URL
+        let isSecurityScoped: Bool
+        /// A plain `.lrc` is displayed but does not end the lookup: it carries
+        /// none of the LRCX extras, so a search still runs to try to better it.
+        let allowsFurtherSearching: Bool
+    }
+
+    /// The saved-lyrics library, in lookup order: every spelling of the name as
+    /// LRCX first, then every spelling as plain LRC.
+    ///
+    /// Both spellings, because `persist()` writes the canonical (trimmed) name
+    /// while libraries from older releases carry an untrimmed one. Reading only
+    /// the legacy spelling leaves a file this very session just saved
+    /// unreachable whenever the metadata has surrounding whitespace — harmless
+    /// while a cache hit merely saved a search, but not once the search-fallback
+    /// path below depends on reading back what was written. For metadata
+    /// without surrounding whitespace the two spellings coincide and this
+    /// returns exactly the two files it always did.
+    private func librarySearchFiles(title: String, artist: String) -> [LyricsLookupCandidateFile] {
+        let (directoryURL, isSecurityScoped) = defaults.lyricsSavingPath()
+        let baseURLs = LyricsStoragePolicy
+            .libraryFileBaseNameCandidates(title: title, artist: artist)
+            .map { directoryURL.appendingPathComponent($0) }
+        return baseURLs.map {
+            LyricsLookupCandidateFile(
+                fileURL: $0.appendingPathExtension("lrcx"),
+                isSecurityScoped: isSecurityScoped,
+                allowsFurtherSearching: false
+            )
+        } + baseURLs.map {
+            LyricsLookupCandidateFile(
+                fileURL: $0.appendingPathExtension("lrc"),
+                isSecurityScoped: isSecurityScoped,
+                allowsFurtherSearching: true
+            )
+        }
+    }
+
+    /// Reads the library that `ignoreCachedLyricsLibrary` told the lookup to
+    /// skip — but only when the search came back empty-handed. Without this,
+    /// "always fetch fresh" would degrade into "no lyrics at all" whenever the
+    /// network is down, which is plainly worse than a possibly stale file.
+    private func loadLibraryLyricsIfSearchFoundNothing(for track: MusicTrack, title: String, artist: String) {
+        guard defaults[.ignoreCachedLyricsLibrary],
+              currentLyrics == nil,
+              // The search may well have outlived the track it was started for.
+              selectedPlayer.currentTrack?.id == track.id else {
+            return
+        }
+        for candidateFile in librarySearchFiles(title: title, artist: artist) {
+            if let lyrics = loadLyrics(
+                at: candidateFile.fileURL,
+                securityScopedURL: candidateFile.isSecurityScoped ? candidateFile.fileURL : nil,
+                title: title,
+                artist: artist
+            ) {
+                currentLyrics = lyrics
+                adoptAsSoleLyricsCandidate(lyrics)
+                return
             }
         }
     }

@@ -6295,6 +6295,66 @@
         }
       }
     },
+    "icl-cb-bCl.title" : {
+      "comment" : "Class = \"NSButtonCell\"; title = \"Always ignore saved lyrics and search again\"; ObjectID = \"icl-cb-bCl\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Always ignore saved lyrics and search again"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Always ignore saved lyrics and search again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总是忽略已保存的歌词，每次重新搜索"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "總是忽略已儲存的歌詞，每次重新搜尋"
+          }
+        }
+      }
+    },
+    "icl-ex-tCl.title" : {
+      "comment" : "Class = \"NSTextFieldCell\"; title = \"Skips only lyrics LyricsX saved itself, not embedded or beside-track files. Used anyway when a search finds nothing.\"; ObjectID = \"icl-ex-tCl\";",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "base" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skips only lyrics LyricsX saved itself, not embedded or beside-track files. Used anyway when a search finds nothing."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Skips only lyrics LyricsX saved itself, not embedded or beside-track files. Used anyway when a search finds nothing."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只跳过 LyricsX 自己保存的歌词，不影响内嵌歌词和音轨旁边的文件。搜索一无所获时仍会读取已保存的歌词。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只略過 LyricsX 自己儲存的歌詞，不影響內嵌歌詞與音軌旁的檔案。搜尋一無所獲時仍會讀取已儲存的歌詞。"
+          }
+        }
+      }
+    },
     "IE7-IT-oPk.title" : {
       "comment" : "Class = \"NSMenuItem\"; title = \"LyricsX (Default)\"; ObjectID = \"IE7-IT-oPk\";",
       "extractionState" : "stale",

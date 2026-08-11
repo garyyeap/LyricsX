@@ -104,6 +104,10 @@ extension UserDefaults.DefaultsKeys {
     static let lyricsCustomSavingPathBookmark = Key<Data?>("LyricsCustomSavingPathBookmark")
     static let loadLyricsBesideTrack = Key<Bool>("LoadLyricsBesideTrack")
     static let writeBackToLyricsBesideTrack = Key<Bool>("WriteBackToLyricsBesideTrack")
+    /// Skip the lyrics LyricsX saved for itself and search afresh every time.
+    /// Only that library is skipped — embedded lyrics, files sitting beside the
+    /// track and hand-picked selections are the user's, not a cache.
+    static let ignoreCachedLyricsLibrary = Key<Bool>("IgnoreCachedLyricsLibrary")
     /// Track id -> the lyrics file the user picked by hand, encoded by
     /// `LyricsSelectionOverrideTable`. Consulted before every automatic lookup
     /// so a manual pick is not undone by an embedded or beside-track file.
