@@ -443,7 +443,7 @@
                                     <gridCell row="icl-ex-rOw" column="IfN-lq-biT" id="icl-ex-cRh">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="icl-ex-tFd">
                                             <rect key="frame" x="215" y="380" width="358" height="44"/>
-                                            <textFieldCell key="cell" title="Skips only lyrics LyricsX saved itself, not embedded or beside-track files. Used anyway when a search finds nothing." id="icl-ex-tCl">
+                                            <textFieldCell key="cell" title="Skips only lyrics LyricsX saved itself, not embedded, beside-track or hand-picked ones. Used anyway when a search finds nothing." id="icl-ex-tCl">
                                                 <font key="font" metaFont="system"/>
                                                 <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                                 <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>

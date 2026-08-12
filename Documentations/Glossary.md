@@ -65,12 +65,29 @@ Apple Music 曲目本地化名恢复：先拿到曲目的原文（母语）名�
 
 LyricsX **自己**保存歌词的那个目录（默认 `~/Music/LyricsX/`，或用户自定义路径）里的文件。
 
-**「缓存」只指这一层。** 内嵌歌词和 beside-track 歌词同样是本地文件，但它们是**用户的**资产，
-不是缓存 —— 这条分界正是 `IgnoreCachedLyricsLibrary` 开关的作用范围
+**「缓存」只指这一层，且只指其中没有[手选标记](#手选标记user-pick-mark)的那些。**
+内嵌歌词和 beside-track 歌词同样是本地文件，但它们是**用户的**资产，不是缓存；
+库里带手选标记的文件也不是缓存，它是用户的**决定**，只是恰好存在同一个目录里。
+这条分界正是 `IgnoreCachedLyricsLibrary` 开关的作用范围
 （详见 [绕过歌词库缓存](Internal/LyricsLibraryCacheBypass.md)）。
 
 缓存命中会让 `currentTrackChanged` 直接返回、一次网络请求都不发，所以库里存错的文件
 **永远不会自我修复**。
+
+## 手选标记（user-pick mark）
+
+写在 `.lrcx` 文件里的一行 `[lxpick:<来源>]`，表示这份歌词是用户**手动应用**的，
+而不是自动搜索自己存下的。四个入口会打它：搜索面板「使用歌词」、快捷键切换候选、
+拖入/粘贴导入、手动编辑（分别记 `search-panel` / `next-candidate` / `import` / `edit`）。
+
+- **判断只看标签在不在，不看取值** —— 取值只为排查时看一眼来路；未来版本写下的陌生取值
+  同样算数，因为它照样出自某个人的动作。
+- **标记跟着文件走**，不存偏好设置：换设备、恢复备份、手动整理歌词库都不丢，也没有条数上限。
+  这正是它与[覆盖表](#覆盖表selection-override-table)的分工 —— 覆盖表解决查找**顺序**，
+  标记解决**归属**。
+- 旧文件没有标记，一律按自动缓存处理，不做迁移。
+- 定义在 `LyricsXFoundation/LyricsUserPickMark.swift`（`Lyrics.isUserPicked`、
+  `markAsUserPicked(origin:)`）。
 
 ## 分数桶（quality bucket）
 

@@ -114,6 +114,15 @@ extension UserDefaults {
         )
     }
 
+    func lyricsPersistRewritesFileInPlace(_ fileURL: URL) -> Bool {
+        return LyricsStoragePolicy.rewritesFileInPlace(
+            localURL: fileURL,
+            allowUnmanagedLocalWriteBack: self[.writeBackToLyricsBesideTrack],
+            defaultDirectoryURL: lyricsDefaultSavingDirectory,
+            customDirectoryURL: lyricsCustomSavingPath
+        )
+    }
+
     func lyricsSecurityScopedDirectory(containing fileURL: URL) -> URL? {
         guard let directoryURL = lyricsCustomSavingPath,
               LyricsStoragePolicy.contains(fileURL, in: directoryURL) else {

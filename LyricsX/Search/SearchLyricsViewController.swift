@@ -112,7 +112,15 @@ class SearchLyricsViewController: NSViewController, NSTableViewDelegate, NSTable
 
         let lrc = searchResult[index]
         lrc.associateWithTrack(track)
+        // Applying a result from this panel is the clearest statement of intent
+        // there is, so the file records that a person chose it — the "ignore
+        // saved lyrics" switch skips what LyricsX saved on its own, not this.
+        lrc.markAsUserPicked(origin: .searchPanel)
         AppController.shared.currentLyrics = lrc
+        // Written now rather than at the next track change: the mark is only
+        // worth anything once it is on disk, and the choice is already made.
+        lrc.metadata.needsPersist = true
+        lrc.persist()
         // Hand the whole sorted list over, not just the pick: the
         // next-candidate shortcut should carry on from what the user chose
         // here instead of walking a pool built by the automatic search.

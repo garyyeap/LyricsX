@@ -98,6 +98,27 @@ public enum LyricsStoragePolicy {
         return libraryDestination
     }
 
+    /// Whether persisting lyrics that were loaded from `localURL` writes back
+    /// to that very file, instead of producing a copy elsewhere.
+    ///
+    /// The edit entry point asks before writing: it then hands the file to an
+    /// external editor, and a write that landed elsewhere would leave the user
+    /// editing a copy that the lookup order never reaches.
+    public static func rewritesFileInPlace(
+        localURL: URL,
+        allowUnmanagedLocalWriteBack: Bool,
+        defaultDirectoryURL: URL,
+        customDirectoryURL: URL?
+    ) -> Bool {
+        persistDestination(
+            localURL: localURL,
+            allowUnmanagedLocalWriteBack: allowUnmanagedLocalWriteBack,
+            defaultDirectoryURL: defaultDirectoryURL,
+            customDirectoryURL: customDirectoryURL,
+            libraryDestination: nil
+        )?.fileURL == localURL
+    }
+
     public static func destination(
         locationRawValue: Int,
         title: String?,
@@ -156,8 +177,14 @@ public enum LyricsStoragePolicy {
         return candidates
     }
 
+    /// Creates the file an editor is about to be pointed at, and returns it.
+    ///
+    /// `initialContents` is written only when the file is created here. An
+    /// existing file is returned untouched — it holds lyrics the user already
+    /// has, and seeding over them would be data loss.
     public static func prepareEmptyFile(
         at destination: LyricsStorageDestination,
+        initialContents: String = "",
         fileManager: FileManager = .default
     ) throws -> URL {
         let securityURL = destination.securityScopedDirectoryURL
@@ -192,7 +219,7 @@ public enum LyricsStoragePolicy {
             return fileURL
         }
 
-        try Data().write(to: fileURL, options: .atomic)
+        try Data(initialContents.utf8).write(to: fileURL, options: .atomic)
         return fileURL
     }
 

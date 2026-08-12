@@ -119,3 +119,46 @@ func besideTrackLyricsAreOnlyRewrittenWhenTheUserOptsIn() {
     )
     #expect(withOptIn?.fileURL == besideTrackURL)
 }
+
+/// Editing a track that has no lyrics yet creates the file pre-seeded with the
+/// user-pick mark, so that whatever the user types into it is recognized as a
+/// hand-made choice on the next play.
+@Test
+func preparingAFileThatDoesNotExistWritesTheInitialContents() throws {
+    let directoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LyricsStoragePolicyTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+    let destination = LyricsStorageDestination(
+        fileURL: directoryURL.appendingPathComponent("Title - Artist.lrcx"),
+        securityScopedDirectoryURL: nil
+    )
+    let markLine = Lyrics.userPickMarkLine(origin: .edit)
+    let fileURL = try LyricsStoragePolicy.prepareEmptyFile(at: destination, initialContents: markLine)
+
+    #expect(fileURL == destination.fileURL)
+    #expect(try String(contentsOf: fileURL, encoding: .utf8) == markLine)
+}
+
+/// The same call on a file that already exists must leave it alone: it holds
+/// the lyrics the user is about to edit, and seeding over them is data loss.
+@Test
+func preparingAFileThatAlreadyExistsLeavesItsContentsAlone() throws {
+    let directoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("LyricsStoragePolicyTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directoryURL) }
+    try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+    let fileURL = directoryURL.appendingPathComponent("Title - Artist.lrcx")
+    let existingContents = "[00:01.00]Words the user already has\n"
+    try Data(existingContents.utf8).write(to: fileURL, options: .atomic)
+
+    let destination = LyricsStorageDestination(fileURL: fileURL, securityScopedDirectoryURL: nil)
+    let preparedURL = try LyricsStoragePolicy.prepareEmptyFile(
+        at: destination,
+        initialContents: Lyrics.userPickMarkLine(origin: .edit)
+    )
+
+    #expect(preparedURL == fileURL)
+    #expect(try String(contentsOf: preparedURL, encoding: .utf8) == existingContents)
+}

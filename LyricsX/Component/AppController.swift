@@ -446,12 +446,14 @@ final class AppController: NSObject {
                     LyricsLookupCandidateFile(
                         fileURL: besideTrackBaseURL.appendingPathExtension("lrcx"),
                         isSecurityScoped: false,
-                        allowsFurtherSearching: false
+                        allowsFurtherSearching: false,
+                        isLibraryFile: false
                     ),
                     LyricsLookupCandidateFile(
                         fileURL: besideTrackBaseURL.appendingPathExtension("lrc"),
                         isSecurityScoped: false,
-                        allowsFurtherSearching: false
+                        allowsFurtherSearching: false,
+                        isLibraryFile: false
                     ),
                 ]
             }
@@ -459,10 +461,10 @@ final class AppController: NSObject {
 
         // The library is the only layer the "ignore saved lyrics" switch covers:
         // everything above is either the user's own file or the user's own
-        // choice, and neither is a cache to be bypassed.
-        if !defaults[.ignoreCachedLyricsLibrary] {
-            candidateLyricsFiles += librarySearchFiles(title: title, artist: artist)
-        }
+        // choice, and neither is a cache to be bypassed. It is read even when
+        // the switch is on, because the file itself says whether the switch
+        // applies to it — and that can only be seen after reading it.
+        candidateLyricsFiles += librarySearchFiles(title: title, artist: artist)
 
         for candidateFile in candidateLyricsFiles {
             if let lyrics = loadLyrics(
@@ -471,6 +473,14 @@ final class AppController: NSObject {
                 title: title,
                 artist: artist
             ) {
+                // The switch means "do not trust what LyricsX saved for itself".
+                // Lyrics the user applied by hand were never LyricsX's own
+                // decision, so they stay in play.
+                if candidateFile.isLibraryFile,
+                   defaults[.ignoreCachedLyricsLibrary],
+                   !lyrics.isUserPicked {
+                    continue
+                }
                 currentLyrics = lyrics
                 adoptAsSoleLyricsCandidate(lyrics)
                 if candidateFile.allowsFurtherSearching {
@@ -544,6 +554,9 @@ final class AppController: NSObject {
         /// A plain `.lrc` is displayed but does not end the lookup: it carries
         /// none of the LRCX extras, so a search still runs to try to better it.
         let allowsFurtherSearching: Bool
+        /// A file from LyricsX's own library, which the bypass switch may reject
+        /// once it has been read and found to carry no user-pick mark.
+        let isLibraryFile: Bool
     }
 
     /// The saved-lyrics library, in lookup order: every spelling of the name as
@@ -566,13 +579,15 @@ final class AppController: NSObject {
             LyricsLookupCandidateFile(
                 fileURL: $0.appendingPathExtension("lrcx"),
                 isSecurityScoped: isSecurityScoped,
-                allowsFurtherSearching: false
+                allowsFurtherSearching: false,
+                isLibraryFile: true
             )
         } + baseURLs.map {
             LyricsLookupCandidateFile(
                 fileURL: $0.appendingPathExtension("lrc"),
                 isSecurityScoped: isSecurityScoped,
-                allowsFurtherSearching: true
+                allowsFurtherSearching: true,
+                isLibraryFile: true
             )
         }
     }
@@ -771,6 +786,7 @@ final class AppController: NSObject {
         candidateSelectionIsPinned = true
         lyricsCandidatePool.selectCandidate(identicalTo: lyrics)
         lyrics.associateWithTrack(track)
+        lyrics.markAsUserPicked(origin: .nextCandidate)
         lyrics.metadata.needsPersist = true
         currentLyrics = lyrics
 
@@ -1080,6 +1096,7 @@ extension AppController {
         lrc.applyQQMusicKanaFurigana()
         lrc.filtrate()
         lrc.recognizeLanguage()
+        lrc.markAsUserPicked(origin: .import)
         lrc.metadata.needsPersist = true
         currentLyrics = lrc
         // An imported file is as deliberate a choice as picking a candidate, so

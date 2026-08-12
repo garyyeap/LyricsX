@@ -321,7 +321,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         let url: URL
         let securityScopedDirectoryURL: URL?
         if let lyrics = AppController.shared.currentLyrics {
-            if lyrics.metadata.localURL == nil, lyrics.metadata.needsPersist {
+            // The mark has to be in the file before the editor gets it: the
+            // saving is done by the user in another app from here on, and
+            // LyricsX never sees the result to mark it afterwards.
+            //
+            // Only when the write lands on the file about to be opened, though.
+            // Lyrics that came from beside the track are read-only by default,
+            // so persisting them produces a library copy — and the user would
+            // then be editing a file the lookup never reaches, since the
+            // beside-track original still wins. Those files are not the switch's
+            // business anyway, so leaving them unmarked costs nothing.
+            if let localURL = lyrics.metadata.localURL {
+                if defaults.lyricsPersistRewritesFileInPlace(localURL) {
+                    lyrics.markAsUserPicked(origin: .edit)
+                    lyrics.metadata.needsPersist = true
+                    lyrics.persist()
+                }
+            } else if lyrics.metadata.needsPersist {
+                // Never written anywhere yet, so this creates the library file
+                // and the mark rides along with it.
+                lyrics.markAsUserPicked(origin: .edit)
                 lyrics.persist()
             }
             guard let localURL = lyrics.metadata.localURL else {
@@ -340,7 +359,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
                 return
             }
             do {
-                url = try LyricsStoragePolicy.prepareEmptyFile(at: destination)
+                // The new file opens with the mark already on its first line,
+                // so lyrics typed underneath count as the user's own choice.
+                url = try LyricsStoragePolicy.prepareEmptyFile(
+                    at: destination,
+                    initialContents: Lyrics.userPickMarkLine(origin: .edit)
+                )
                 securityScopedDirectoryURL = destination.securityScopedDirectoryURL
             } catch {
                 log(error.localizedDescription)
