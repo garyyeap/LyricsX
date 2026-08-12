@@ -12,3 +12,4 @@
 | [0001](0001-next-lyrics-candidate.md) | 切换到下一条歌词候选 | Implemented |
 | [0002](0002-always-ignore-cached-lyrics.md) | 总是忽略歌词库缓存 | Implemented |
 | [0003](0003-source-ordering-modes.md) | 歌词源排序模式：分数优先，同分再看源 | Implemented |
+| [0004](0004-user-picked-lyrics-exemption.md) | 手动应用过的歌词豁免于「忽略已保存的歌词」 | Draft |
