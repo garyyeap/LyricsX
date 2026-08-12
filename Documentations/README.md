@@ -17,6 +17,10 @@
     分数接近时才由歌词源顺序裁决。
   - [0004 手动应用过的歌词豁免于「忽略已保存的歌词」](Evolutions/0004-user-picked-lyrics-exemption.md)
     —— 给手动挑选/导入/编辑过的歌词打一个文件内标记，0002 的开关不再跳过它们。
+  - [0005 换快捷键库](Evolutions/0005-keyboard-shortcuts-library-swap.md) —— MASShortcut 已归档
+    且录制控件自绘、不跟随系统外观，换成 KeyboardShortcuts。
+  - [0006 设置界面迁移到 SwiftUI](Evolutions/0006-swiftui-settings.md) —— 参照 RuntimeViewer 的
+    设置模块架构逐页迁移，最低系统提到 macOS 14。
 
 ## 实现说明
 

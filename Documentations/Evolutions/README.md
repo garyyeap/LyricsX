@@ -13,3 +13,6 @@
 | [0002](0002-always-ignore-cached-lyrics.md) | 总是忽略歌词库缓存 | Implemented |
 | [0003](0003-source-ordering-modes.md) | 歌词源排序模式：分数优先，同分再看源 | Implemented |
 | [0004](0004-user-picked-lyrics-exemption.md) | 手动应用过的歌词豁免于「忽略已保存的歌词」 | Draft |
+| [0005](0005-keyboard-shortcuts-library-swap.md) | 快捷键库从 MASShortcut 换成 KeyboardShortcuts | Draft |
+| [0006](0006-swiftui-settings.md) | 设置界面迁移到 SwiftUI | Draft |
+
