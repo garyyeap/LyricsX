@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0AF1A0010B0B0B0B0B0B0B02 /* AppleMusicLyricsPanel in Frameworks */ = {isa = PBXBuildFile; productRef = 0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */; };
 		0DB25079533538D85D98A968 /* ColorfulX in Frameworks */ = {isa = PBXBuildFile; productRef = E5E613E102B0FC5E5F71472F /* ColorfulX */; };
 		2184C9F27CF97FD28E82B0A8 /* LyricsXWidgetShared in Frameworks */ = {isa = PBXBuildFile; productRef = 753562E8D796EC165DEE2DEE /* LyricsXWidgetShared */; };
 		BB60F3121E889FCD00BA1FD2 /* LyricsXHelper.app in Copy Helper */ = {isa = PBXBuildFile; fileRef = BB60F3011E889A1B00BA1FD2 /* LyricsXHelper.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -22,7 +23,6 @@
 		E9C4E2992AC9A10F004B9EB2 /* MASShortcut in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E2982AC9A10F004B9EB2 /* MASShortcut */; };
 		E9C4E29C2AC9A124004B9EB2 /* SnapKit in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E29B2AC9A124004B9EB2 /* SnapKit */; };
 		E9C4E2A22AC9A3D6004B9EB2 /* SwiftCF in Frameworks */ = {isa = PBXBuildFile; productRef = E9C4E2A12AC9A3D6004B9EB2 /* SwiftCF */; };
-		0AF1A0010B0B0B0B0B0B0B02 /* AppleMusicLyricsPanel in Frameworks */ = {isa = PBXBuildFile; productRef = 0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */; };
 		E9C5763D2DEDF539009107B5 /* LyricsXFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E9C5763C2DEDF539009107B5 /* LyricsXFoundation */; };
 		E9C5763F2DEDF539009107B5 /* LyricsXWidgetShared in Frameworks */ = {isa = PBXBuildFile; productRef = E9C5763E2DEDF539009107B5 /* LyricsXWidgetShared */; };
 		E9EF0D512D6F5ECD00D45E0F /* UIFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E9EF0D502D6F5ECD00D45E0F /* UIFoundation */; };
@@ -721,6 +721,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AppleMusicLyricsPanel;
+		};
 		753562E8D796EC165DEE2DEE /* LyricsXWidgetShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = LyricsXWidgetShared;
@@ -783,10 +787,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E9C4E2A02AC9A3D6004B9EB2 /* XCRemoteSwiftPackageReference "SwiftCF" */;
 			productName = SwiftCF;
-		};
-		0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = AppleMusicLyricsPanel;
 		};
 		E9C5763C2DEDF539009107B5 /* LyricsXFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
