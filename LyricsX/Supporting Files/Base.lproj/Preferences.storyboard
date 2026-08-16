@@ -67,11 +67,11 @@
             <objects>
                 <viewController title="General" id="GaA-xG-8SL" userLabel="General" customClass="PreferenceGeneralViewController" customModule="LyricsX" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" id="Bzr-sv-FuP">
-                        <rect key="frame" x="0.0" y="0.0" width="611" height="744"/>
+                        <rect key="frame" x="0.0" y="0.0" width="611" height="782"/>
                         <autoresizingMask key="autoresizingMask"/>
                         <subviews>
                             <box title="Preferred music player" translatesAutoresizingMaskIntoConstraints="NO" id="FxG-RK-g7y">
-                                <rect key="frame" x="20" y="614" width="571" height="106"/>
+                                <rect key="frame" x="20" y="652" width="571" height="106"/>
                                 <view key="contentView" id="Mdd-yA-dBT">
                                     <rect key="frame" x="0.0" y="0.0" width="571" height="94"/>
                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
@@ -304,7 +304,7 @@
                                 </view>
                             </box>
                             <gridView xPlacement="leading" yPlacement="bottom" rowAlignment="none" translatesAutoresizingMaskIntoConstraints="NO" id="hBJ-hq-S4u">
-                                <rect key="frame" x="20" y="20" width="571" height="584"/>
+                                <rect key="frame" x="20" y="20" width="571" height="622"/>
                                 <rows>
                                     <gridRow yPlacement="center" height="30" id="5do-X5-xgX"/>
                                     <gridRow yPlacement="center" height="30" id="Nkw-LC-Lbi"/>
@@ -334,7 +334,7 @@
                                     <gridCell row="5do-X5-xgX" column="3Hg-Ka-QrM" id="vUV-9r-hs4"/>
                                     <gridCell row="5do-X5-xgX" column="IfN-lq-biT" id="Qf5-qY-K1u">
                                         <button key="contentView" verticalHuggingPriority="1000" translatesAutoresizingMaskIntoConstraints="NO" id="KCS-6F-vyn">
-                                            <rect key="frame" x="217" y="493" width="242" height="16"/>
+                                            <rect key="frame" x="217" y="599" width="242" height="16"/>
                                             <buttonCell key="cell" type="check" title="Auto launch &amp; quit with music player" bezelStyle="regularSquare" imagePosition="left" state="on" inset="2" id="Z0u-vP-mn0">
                                                 <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                                 <font key="font" metaFont="system"/>
@@ -351,7 +351,7 @@
                                     </gridCell>
                                     <gridCell row="Nkw-LC-Lbi" column="3Hg-Ka-QrM" id="GVk-Na-9Qx">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="mMr-cH-jAi">
-                                            <rect key="frame" x="85" y="457" width="117" height="16"/>
+                                            <rect key="frame" x="85" y="563" width="117" height="16"/>
                                             <textFieldCell key="cell" scrollable="YES" lineBreakMode="clipping" sendsActionOnEndEditing="YES" alignment="right" title="Lyrics saving path:" id="toz-Mz-SHW">
                                                 <font key="font" metaFont="system"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -361,7 +361,7 @@
                                     </gridCell>
                                     <gridCell row="Nkw-LC-Lbi" column="IfN-lq-biT" id="8wo-Aw-Cbv">
                                         <stackView key="contentView" distribution="fill" orientation="horizontal" alignment="top" horizontalStackHuggingPriority="249.99998474121094" verticalStackHuggingPriority="249.99998474121094" detachesHiddenViews="YES" translatesAutoresizingMaskIntoConstraints="NO" id="IBT-ZS-FAA">
-                                            <rect key="frame" x="217" y="453" width="189" height="24"/>
+                                            <rect key="frame" x="217" y="559" width="189" height="24"/>
                                             <subviews>
                                                 <popUpButton verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="c8h-bP-qfB">
                                                     <rect key="frame" x="0.0" y="0.0" width="160" height="24"/>
@@ -425,7 +425,7 @@
                                     <gridCell row="icl-cb-rOw" column="3Hg-Ka-QrM" id="icl-cb-cLh"/>
                                     <gridCell row="icl-cb-rOw" column="IfN-lq-biT" id="icl-cb-cRh">
                                         <button key="contentView" verticalHuggingPriority="1000" translatesAutoresizingMaskIntoConstraints="NO" id="icl-cb-Btn">
-                                            <rect key="frame" x="217" y="428" width="354" height="16"/>
+                                            <rect key="frame" x="217" y="532" width="288" height="16"/>
                                             <buttonCell key="cell" type="check" title="Always ignore saved lyrics and search again" bezelStyle="regularSquare" imagePosition="left" inset="2" id="icl-cb-bCl">
                                                 <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                                 <font key="font" metaFont="system"/>
@@ -442,9 +442,10 @@
                                     <gridCell row="icl-ex-rOw" column="3Hg-Ka-QrM" id="icl-ex-cLh"/>
                                     <gridCell row="icl-ex-rOw" column="IfN-lq-biT" id="icl-ex-cRh">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="icl-ex-tFd">
-                                            <rect key="frame" x="215" y="380" width="358" height="44"/>
-                                            <textFieldCell key="cell" title="Skips only lyrics LyricsX saved itself, not embedded, beside-track or hand-picked ones. Used anyway when a search finds nothing." id="icl-ex-tCl">
-                                                <font key="font" metaFont="system"/>
+                                            <rect key="frame" x="215" y="496" width="358" height="28"/>
+                                            <textFieldCell key="cell" id="icl-ex-tCl">
+                                                <font key="font" metaFont="smallSystem"/>
+                                                <string key="title">Skips only lyrics LyricsX saved itself, not embedded, beside-track or hand-picked ones. Used anyway when a search finds nothing.</string>
                                                 <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                                 <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                                             </textFieldCell>
@@ -453,7 +454,7 @@
                                     <gridCell row="bYQ-nJ-Ce7" column="3Hg-Ka-QrM" id="9RI-Dt-f9i"/>
                                     <gridCell row="bYQ-nJ-Ce7" column="IfN-lq-biT" id="s58-Z9-B82">
                                         <button key="contentView" verticalHuggingPriority="1000" translatesAutoresizingMaskIntoConstraints="NO" id="kmo-rQ-MLa">
-                                            <rect key="frame" x="217" y="428" width="354" height="16"/>
+                                            <rect key="frame" x="217" y="454" width="354" height="16"/>
                                             <buttonCell key="cell" type="check" title="Load lyrics from music file (order: embedded &gt; beside)" bezelStyle="regularSquare" imagePosition="left" state="on" inset="2" id="vUt-b5-jlE">
                                                 <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                                 <font key="font" metaFont="system"/>
@@ -470,18 +471,18 @@
                                     <gridCell row="writeBackBeside-row" column="3Hg-Ka-QrM" id="writeBackBeside-label-cell"/>
                                     <gridCell row="writeBackBeside-row" column="IfN-lq-biT" id="writeBackBeside-button-cell">
                                         <button key="contentView" verticalHuggingPriority="1000" translatesAutoresizingMaskIntoConstraints="NO" id="writeBackBeside-button">
-                                            <rect key="frame" x="217" y="304" width="354" height="16"/>
+                                            <rect key="frame" x="217" y="428" width="340" height="16"/>
                                             <buttonCell key="cell" type="check" title="Allow writing changes back to lyrics beside the track" bezelStyle="regularSquare" imagePosition="left" inset="2" id="writeBackBeside-button-cell-inner">
                                                 <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                                 <font key="font" metaFont="system"/>
                                             </buttonCell>
                                             <connections>
-                                                <binding destination="968-l4-9l5" name="value" keyPath="values.WriteBackToLyricsBesideTrack" id="writeBackBeside-value-binding">
+                                                <binding destination="968-l4-9l5" name="enabled" keyPath="values.LoadLyricsBesideTrack" id="writeBackBeside-enabled-binding">
                                                     <dictionary key="options">
                                                         <bool key="NSConditionallySetsEnabled" value="NO"/>
                                                     </dictionary>
                                                 </binding>
-                                                <binding destination="968-l4-9l5" name="enabled" keyPath="values.LoadLyricsBesideTrack" id="writeBackBeside-enabled-binding">
+                                                <binding destination="968-l4-9l5" name="value" keyPath="values.WriteBackToLyricsBesideTrack" id="writeBackBeside-value-binding">
                                                     <dictionary key="options">
                                                         <bool key="NSConditionallySetsEnabled" value="NO"/>
                                                     </dictionary>
@@ -579,9 +580,9 @@
                                     <gridCell row="ubP-tx-cL1" column="3Hg-Ka-QrM" id="vTr-0g-EfT"/>
                                     <gridCell row="ubP-tx-cL1" column="IfN-lq-biT" id="IMv-38-Xeu">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="2iE-C1-iCF">
-                                            <rect key="frame" x="215" y="278" width="261" height="16"/>
+                                            <rect key="frame" x="215" y="280" width="227" height="14"/>
                                             <textFieldCell key="cell" title="Search result match the exact search term" id="SGe-4J-kW6">
-                                                <font key="font" metaFont="system"/>
+                                                <font key="font" metaFont="smallSystem"/>
                                                 <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                                 <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                                             </textFieldCell>
@@ -603,9 +604,9 @@
                                     <gridCell row="Sbr-ex-rOw" column="3Hg-Ka-QrM" id="Sbr-ex-cLh"/>
                                     <gridCell row="Sbr-ex-rOw" column="IfN-lq-biT" id="Sbr-ex-cRh">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="Sbr-ex-tFd">
-                                            <rect key="frame" x="215" y="210" width="358" height="32"/>
+                                            <rect key="frame" x="215" y="214" width="358" height="28"/>
                                             <textFieldCell key="cell" title="Strip brackets from the title before searching. Strict Search then matches the stripped title." id="Sbr-ex-tCl">
-                                                <font key="font" metaFont="system"/>
+                                                <font key="font" metaFont="smallSystem"/>
                                                 <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                                 <color key="backgroundColor" name="textBackgroundColor" catalog="System" colorSpace="catalog"/>
                                             </textFieldCell>
@@ -1127,6 +1128,7 @@
                             <constraint firstItem="S24-qh-mZa" firstAttribute="top" secondItem="Y71-zj-nPg" secondAttribute="top" constant="20" id="Jht-DT-4iI"/>
                             <constraint firstItem="S24-qh-mZa" firstAttribute="leading" secondItem="Y71-zj-nPg" secondAttribute="leading" constant="20" id="Ywa-Iq-NZm"/>
                             <constraint firstAttribute="bottom" secondItem="S24-qh-mZa" secondAttribute="bottom" constant="24" id="a8M-rW-iSm"/>
+                            <constraint firstAttribute="width" priority="700" constant="600" id="dsp-rt-wid"/>
                         </constraints>
                     </view>
                     <connections>
@@ -1212,6 +1214,8 @@
                                 </clipView>
                                 <constraints>
                                     <constraint firstAttribute="height" relation="greaterThanOrEqual" constant="200" id="76x-ZZ-y2t"/>
+                                    <constraint firstAttribute="height" priority="700" constant="260" id="flt-sv-hgt"/>
+                                    <constraint firstAttribute="width" priority="700" constant="560" id="flt-sv-wid"/>
                                     <constraint firstAttribute="width" relation="greaterThanOrEqual" constant="160" id="tIK-NZ-yR0"/>
                                 </constraints>
                                 <scroller key="horizontalScroller" hidden="YES" wantsLayer="YES" verticalHuggingPriority="750" horizontal="YES" id="DZ9-1k-eD8">
@@ -1334,7 +1338,7 @@
                                 <gridCells>
                                     <gridCell row="jY8-Kk-qdJ" column="esM-YS-kWh" id="AzW-ss-eYQ">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="NBI-fD-Ykg">
-                                            <rect key="frame" x="125" y="279" width="177" height="16"/>
+                                            <rect key="frame" x="125" y="313" width="177" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Show / Hide menu bar lyrics:" id="1So-eI-ovg">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1344,7 +1348,7 @@
                                     </gridCell>
                                     <gridCell row="jY8-Kk-qdJ" column="bJv-P7-ixx" id="Enk-Oz-T9O">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="atC-aF-Wgo" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="278" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="312" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="height" constant="19" id="qzP-hb-vHV"/>
                                                 <constraint firstAttribute="width" constant="160" id="vSh-RY-8P1"/>
@@ -1356,7 +1360,7 @@
                                     </gridCell>
                                     <gridCell row="AlP-AQ-saG" column="esM-YS-kWh" id="PT7-w9-kSH">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="ody-co-woU">
-                                            <rect key="frame" x="135" y="245" width="167" height="16"/>
+                                            <rect key="frame" x="135" y="279" width="167" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Show / Hide karaoke lyrics:" id="L8S-rm-0tr">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1366,7 +1370,7 @@
                                     </gridCell>
                                     <gridCell row="AlP-AQ-saG" column="bJv-P7-ixx" id="m5q-ij-HSm">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="MOp-rl-QfB" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="244" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="278" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="height" constant="19" id="XWB-l1-I2s"/>
                                                 <constraint firstAttribute="width" constant="160" id="ch0-F9-lsK"/>
@@ -1378,7 +1382,7 @@
                                     </gridCell>
                                     <gridCell row="7ME-sH-ygQ" column="esM-YS-kWh" id="oyo-bg-eMb">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="kHG-AN-g9Z">
-                                            <rect key="frame" x="175" y="211" width="127" height="16"/>
+                                            <rect key="frame" x="175" y="245" width="127" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Show lyrics window:" id="OVq-fi-jsy">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1388,7 +1392,7 @@
                                     </gridCell>
                                     <gridCell row="7ME-sH-ygQ" column="bJv-P7-ixx" id="opp-Mz-Mut">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="bhi-qY-Zz3" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="210" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="244" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="height" constant="19" id="66b-et-Gqf"/>
                                                 <constraint firstAttribute="width" constant="160" id="yen-GH-bfa"/>
@@ -1400,7 +1404,7 @@
                                     </gridCell>
                                     <gridCell row="Gn0-sE-aMD" column="esM-YS-kWh" id="Fz0-hZ-WNm">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="s4j-Pi-Jo5">
-                                            <rect key="frame" x="168" y="177" width="134" height="16"/>
+                                            <rect key="frame" x="168" y="211" width="134" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Increase lyrics offset:" id="gOr-e9-SZS">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1410,7 +1414,7 @@
                                     </gridCell>
                                     <gridCell row="Gn0-sE-aMD" column="bJv-P7-ixx" id="Q4E-cQ-VgF">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="gTB-qI-Cvh" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="176" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="210" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="width" constant="160" id="70D-Wx-d8z"/>
                                                 <constraint firstAttribute="height" constant="19" id="BAo-a6-tsb"/>
@@ -1422,7 +1426,7 @@
                                     </gridCell>
                                     <gridCell row="AkV-Sd-Bhi" column="esM-YS-kWh" id="Bgv-ZT-yQ8">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="SjG-qo-2tK">
-                                            <rect key="frame" x="162" y="143" width="140" height="16"/>
+                                            <rect key="frame" x="162" y="177" width="140" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Decrease lyrics offset:" id="K3n-xg-phu">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1432,7 +1436,7 @@
                                     </gridCell>
                                     <gridCell row="AkV-Sd-Bhi" column="bJv-P7-ixx" id="DdI-Ru-LUh">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="BKg-jC-mLK" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="142" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="176" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="width" constant="160" id="Box-jl-qlb"/>
                                                 <constraint firstAttribute="height" constant="19" id="IYL-PA-mmb"/>
@@ -1444,7 +1448,7 @@
                                     </gridCell>
                                     <gridCell row="5sV-rE-tmW" column="esM-YS-kWh" id="8TL-NR-HCc">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="d1P-5Y-Sra">
-                                            <rect key="frame" x="167" y="109" width="135" height="16"/>
+                                            <rect key="frame" x="167" y="143" width="135" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Write lyrics to iTunes:" id="7n2-te-txG">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1454,7 +1458,7 @@
                                     </gridCell>
                                     <gridCell row="5sV-rE-tmW" column="bJv-P7-ixx" id="GXo-co-qQW">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="glK-m4-7j5" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="108" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="142" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="height" constant="19" id="Z46-l2-8BL"/>
                                                 <constraint firstAttribute="width" constant="160" id="g66-DM-OKn"/>
@@ -1466,7 +1470,7 @@
                                     </gridCell>
                                     <gridCell row="vwx-TH-aiN" column="esM-YS-kWh" id="Zvr-M9-N8j">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="QsL-Pu-j2b">
-                                            <rect key="frame" x="216" y="75" width="86" height="16"/>
+                                            <rect key="frame" x="216" y="109" width="86" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Search lyrics:" id="Ka5-iG-3e2">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1476,7 +1480,7 @@
                                     </gridCell>
                                     <gridCell row="vwx-TH-aiN" column="bJv-P7-ixx" id="rwR-dM-l1D">
                                         <customView key="contentView" translatesAutoresizingMaskIntoConstraints="NO" id="T62-bQ-EP3" customClass="MASShortcutView">
-                                            <rect key="frame" x="310" y="74" width="160" height="19"/>
+                                            <rect key="frame" x="310" y="108" width="160" height="19"/>
                                             <constraints>
                                                 <constraint firstAttribute="width" constant="160" id="D8b-7w-K0M"/>
                                                 <constraint firstAttribute="height" constant="19" id="Ln2-v9-yiH"/>
@@ -1489,7 +1493,7 @@
                                     </gridCell>
                                     <gridCell row="nlc-Ro-w01" column="esM-YS-kWh" id="nlc-Ce-l01">
                                         <textField key="contentView" focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="nlc-Tf-d01">
-                                            <rect key="frame" x="112" y="75" width="190" height="16"/>
+                                            <rect key="frame" x="109" y="75" width="193" height="16"/>
                                             <textFieldCell key="cell" lineBreakMode="clipping" title="Switch to next lyrics candidate:" id="nlc-Tc-l01">
                                                 <font key="font" usesAppearanceFont="YES"/>
                                                 <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
@@ -1941,18 +1945,18 @@
                 <customObject id="WFr-RK-Q1o" userLabel="First Responder" customClass="NSResponder" sceneMemberID="firstResponder"/>
                 <userDefaultsController id="DdU-cn-wN1"/>
             </objects>
-            <point key="canvasLocation" x="1969.5" y="1450"/>
+            <point key="canvasLocation" x="1962" y="1615"/>
         </scene>
         <!--Source-->
         <scene sceneID="CzA-mO-0w8">
             <objects>
                 <viewController title="Source" id="KTZ-mJ-lpY" customClass="PreferenceSourceViewController" customModule="LyricsX" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" misplaced="YES" id="Bkt-jy-GD5">
-                        <rect key="frame" x="0.0" y="0.0" width="200" height="484"/>
+                        <rect key="frame" x="0.0" y="0.0" width="600" height="332"/>
                         <autoresizingMask key="autoresizingMask"/>
                         <subviews>
                             <button verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-q01" userLabel="Rank by quality only">
-                                <rect key="frame" x="20" y="444" width="163" height="16"/>
+                                <rect key="frame" x="20" y="264" width="178" height="16"/>
                                 <buttonCell key="cell" type="radio" title="Rank by match score only" bezelStyle="regularSquare" imagePosition="left" alignment="left" state="on" inset="2" id="sop-Bc-q02">
                                     <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                     <font key="font" metaFont="system"/>
@@ -1962,7 +1966,7 @@
                                 </connections>
                             </button>
                             <button tag="1" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-s01" userLabel="Rank by source first">
-                                <rect key="frame" x="20" y="422" width="163" height="16"/>
+                                <rect key="frame" x="20" y="242" width="179" height="16"/>
                                 <buttonCell key="cell" type="radio" title="Rank by source order first" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="sop-Bc-s02">
                                     <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                     <font key="font" metaFont="system"/>
@@ -1972,7 +1976,7 @@
                                 </connections>
                             </button>
                             <button tag="2" verticalHuggingPriority="750" translatesAutoresizingMaskIntoConstraints="NO" id="sop-Bt-t01" userLabel="Rank by quality, source breaks ties">
-                                <rect key="frame" x="20" y="400" width="163" height="16"/>
+                                <rect key="frame" x="20" y="220" width="315" height="16"/>
                                 <buttonCell key="cell" type="radio" title="Rank by match score, break ties by source order" bezelStyle="regularSquare" imagePosition="left" alignment="left" inset="2" id="sop-Bc-t02">
                                     <behavior key="behavior" changeContents="YES" doesNotDimImage="YES" lightByContents="YES"/>
                                     <font key="font" metaFont="system"/>
@@ -1982,7 +1986,7 @@
                                 </connections>
                             </button>
                             <textField focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" translatesAutoresizingMaskIntoConstraints="NO" id="eMr-xF-JY5">
-                                <rect key="frame" x="18" y="356" width="167" height="36"/>
+                                <rect key="frame" x="18" y="200" width="413" height="12"/>
                                 <textFieldCell key="cell" sendsActionOnEndEditing="YES" title="Drag rows to reorder source priority. Scores within 0.02 of each other count as tied." id="sop-Tc-d01">
                                     <font key="font" size="11" name="HelveticaNeue"/>
                                     <color key="textColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
@@ -1990,13 +1994,13 @@
                                 </textFieldCell>
                             </textField>
                             <scrollView autohidesScrollers="YES" horizontalLineScroll="24" horizontalPageScroll="10" verticalLineScroll="24" verticalPageScroll="10" usesPredominantAxisScrolling="NO" translatesAutoresizingMaskIntoConstraints="NO" id="TcY-l7-0hN">
-                                <rect key="frame" x="20" y="24" width="163" height="300"/>
+                                <rect key="frame" x="20" y="24" width="460" height="160"/>
                                 <clipView key="contentView" id="dVG-81-AoX">
-                                    <rect key="frame" x="1" y="1" width="161" height="298"/>
+                                    <rect key="frame" x="1" y="1" width="458" height="158"/>
                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                     <subviews>
                                         <tableView verticalHuggingPriority="750" allowsExpansionToolTips="YES" columnAutoresizingStyle="lastColumnOnly" alternatingRowBackgroundColors="YES" columnReordering="NO" multipleSelection="NO" autosaveColumns="NO" rowHeight="24" rowSizeStyle="automatic" headerView="Kzd-3h-xxb" viewBased="YES" id="gXu-L7-amu">
-                                            <rect key="frame" x="0.0" y="0.0" width="161" height="270"/>
+                                            <rect key="frame" x="0.0" y="0.0" width="458" height="130"/>
                                             <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                             <size key="intercellSpacing" width="17" height="0.0"/>
                                             <color key="backgroundColor" name="controlBackgroundColor" catalog="System" colorSpace="catalog"/>
@@ -2038,7 +2042,7 @@
                                                         </tableCellView>
                                                     </prototypeCellViews>
                                                 </tableColumn>
-                                                <tableColumn identifier="source" width="82" minWidth="40" maxWidth="1000" id="xXN-7W-SKY">
+                                                <tableColumn identifier="source" width="379" minWidth="40" maxWidth="1000" id="xXN-7W-SKY">
                                                     <tableHeaderCell key="headerCell" lineBreakMode="truncatingTail" borderStyle="border" title="Source">
                                                         <color key="textColor" name="headerTextColor" catalog="System" colorSpace="catalog"/>
                                                         <color key="backgroundColor" name="headerColor" catalog="System" colorSpace="catalog"/>
@@ -2051,11 +2055,11 @@
                                                     <tableColumnResizingMask key="resizingMask" resizeWithTable="YES" userResizable="YES"/>
                                                     <prototypeCellViews>
                                                         <tableCellView id="VGV-SG-dwt">
-                                                            <rect key="frame" x="73" y="0.0" width="79" height="24"/>
+                                                            <rect key="frame" x="73" y="0.0" width="376" height="24"/>
                                                             <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                             <subviews>
                                                                 <textField focusRingType="none" horizontalHuggingPriority="251" verticalHuggingPriority="750" horizontalCompressionResistancePriority="250" translatesAutoresizingMaskIntoConstraints="NO" id="KUU-qx-NSS">
-                                                                    <rect key="frame" x="0.0" y="4" width="79" height="16"/>
+                                                                    <rect key="frame" x="0.0" y="4" width="376" height="16"/>
                                                                     <textFieldCell key="cell" lineBreakMode="truncatingTail" sendsActionOnEndEditing="YES" id="ow1-De-Qmh">
                                                                         <font key="font" usesAppearanceFont="YES"/>
                                                                         <color key="textColor" name="controlTextColor" catalog="System" colorSpace="catalog"/>
@@ -2084,19 +2088,19 @@
                                 </clipView>
                                 <constraints>
                                     <constraint firstAttribute="width" relation="greaterThanOrEqual" constant="160" id="UVZ-8W-DFG"/>
-                                    <constraint firstAttribute="height" relation="lessThanOrEqual" constant="300" id="iOL-7T-LTy"/>
-                                    <constraint firstAttribute="height" relation="greaterThanOrEqual" constant="150" id="z0H-bo-IFm"/>
+                                    <constraint firstAttribute="height" priority="700" constant="216" id="src-sv-hgt"/>
+                                    <constraint firstAttribute="width" priority="700" constant="560" id="src-sv-wid"/>
                                 </constraints>
                                 <scroller key="horizontalScroller" hidden="YES" wantsLayer="YES" verticalHuggingPriority="750" horizontal="YES" id="Cq9-fY-Mad">
-                                    <rect key="frame" x="1" y="170" width="181" height="17"/>
+                                    <rect key="frame" x="1" y="30" width="481" height="17"/>
                                     <autoresizingMask key="autoresizingMask"/>
                                 </scroller>
                                 <scroller key="verticalScroller" hidden="YES" wantsLayer="YES" verticalHuggingPriority="750" horizontal="NO" id="Vnq-hy-YBN">
-                                    <rect key="frame" x="224" y="17" width="15" height="102"/>
+                                    <rect key="frame" x="482" y="29" width="17" height="1"/>
                                     <autoresizingMask key="autoresizingMask"/>
                                 </scroller>
                                 <tableHeaderView key="headerView" wantsLayer="YES" id="Kzd-3h-xxb">
-                                    <rect key="frame" x="0.0" y="0.0" width="161" height="28"/>
+                                    <rect key="frame" x="0.0" y="0.0" width="458" height="28"/>
                                     <autoresizingMask key="autoresizingMask"/>
                                 </tableHeaderView>
                             </scrollView>
@@ -2108,15 +2112,15 @@
                             <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-q01" secondAttribute="trailing" constant="20" id="7B9-GI-7yz"/>
                             <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="eMr-xF-JY5" secondAttribute="trailing" constant="20" id="Nvu-Eg-xwe"/>
                             <constraint firstAttribute="bottom" secondItem="TcY-l7-0hN" secondAttribute="bottom" constant="24" id="Q5D-XX-2sF"/>
-                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-s01" secondAttribute="trailing" constant="20" id="sop-Cn-s04"/>
-                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-t01" secondAttribute="trailing" constant="20" id="sop-Cn-t04"/>
-                            <constraint firstItem="sop-Bt-s01" firstAttribute="top" secondItem="sop-Bt-q01" secondAttribute="bottom" constant="6" id="sop-Cn-s05"/>
-                            <constraint firstItem="sop-Bt-s01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-s06"/>
-                            <constraint firstItem="sop-Bt-t01" firstAttribute="top" secondItem="sop-Bt-s01" secondAttribute="bottom" constant="6" id="sop-Cn-t05"/>
-                            <constraint firstItem="sop-Bt-t01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-t06"/>
                             <constraint firstItem="eMr-xF-JY5" firstAttribute="top" secondItem="sop-Bt-t01" secondAttribute="bottom" constant="8" id="hYH-P6-g1p"/>
                             <constraint firstItem="eMr-xF-JY5" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="op1-11-sKa"/>
                             <constraint firstItem="TcY-l7-0hN" firstAttribute="top" secondItem="eMr-xF-JY5" secondAttribute="bottom" constant="16" id="qK9-My-pei"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-s01" secondAttribute="trailing" constant="20" id="sop-Cn-s04"/>
+                            <constraint firstItem="sop-Bt-s01" firstAttribute="top" secondItem="sop-Bt-q01" secondAttribute="bottom" constant="6" id="sop-Cn-s05"/>
+                            <constraint firstItem="sop-Bt-s01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-s06"/>
+                            <constraint firstAttribute="trailing" relation="greaterThanOrEqual" secondItem="sop-Bt-t01" secondAttribute="trailing" constant="20" id="sop-Cn-t04"/>
+                            <constraint firstItem="sop-Bt-t01" firstAttribute="top" secondItem="sop-Bt-s01" secondAttribute="bottom" constant="6" id="sop-Cn-t05"/>
+                            <constraint firstItem="sop-Bt-t01" firstAttribute="leading" secondItem="sop-Bt-q01" secondAttribute="leading" id="sop-Cn-t06"/>
                             <constraint firstItem="sop-Bt-q01" firstAttribute="top" secondItem="Bkt-jy-GD5" secondAttribute="top" constant="24" id="ztn-mE-wra"/>
                         </constraints>
                     </view>
@@ -2129,7 +2133,7 @@
                 </viewController>
                 <customObject id="JkS-yT-8ul" userLabel="First Responder" customClass="NSResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="2221.5" y="2158"/>
+            <point key="canvasLocation" x="1989" y="2255"/>
         </scene>
     </scenes>
     <resources>

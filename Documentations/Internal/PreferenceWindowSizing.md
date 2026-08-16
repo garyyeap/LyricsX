@@ -1,0 +1,120 @@
+# 设置窗口的尺寸
+
+> 面向维护者。讲的是「为什么这么实现」，不是「实现了什么」——后者读代码更快。
+
+## 一句话
+
+设置窗口不可缩放，尺寸全靠内容算；但 `NSTabViewController` 只在选中页**把自己钉死成一个尺寸**时
+才会去动窗口，所以内容可拉伸的页会原样留着上一页的窗口大小 —— 表现为「同一个 tab，从不同 tab
+切过去高度不一样」。修法是切页后按选中页的 `fittingSize` 主动定窗口尺寸，
+并给几个可拉伸的控件补上优先级 700 的尺寸约束。
+
+## 为什么窗口会「继承」上一页的尺寸
+
+窗口自己带一条**保持现有大小**的约束，优先级 500（`NSLayoutPriorityWindowSizeStayPut`）。
+选中页的内容要压过它，那个方向上必须解出**唯一**尺寸；只给出下界（`>=`）、或者链条上有个
+hugging 优先级低于 500 的控件，500 那条就赢，窗口纹丝不动。
+
+`NSTabViewController` 本身没有任何窗口尺寸逻辑 —— 它的 `updateViewConstraints` 只把 tabView
+钉到自己 view 的四边（优先级 742），剩下的完全交给 Auto Layout。所以这不是「AppKit 的 bug」，
+是「约束没写完整」的正常结果。
+
+修之前六个页里有四个中招：
+
+| 页 | 内容真正需要 | 可拉伸的元凶 | 症状 |
+|---|---|---|---|
+| General | 611×782 | —— | 正常（它最大，别人缩不进来，看着像好的） |
+| Display | 439×398 | 嵌套的 `NSTabView`（宽度只有下界） | 宽度继承 |
+| Shortcut | 600×376 | —— | 正常 |
+| Filter | 600×408 | `NSScrollView`（只有 `width>=160` / `height>=200`） | 宽高都继承 |
+| Lab | 615×732 | `NSGridView`（hugging 250 < 500） | 高度继承 |
+| Source | 449×294 | `NSScrollView`（完全没有尺寸约束） | 宽高都继承 |
+
+General 和 Shortcut「正常」有一半是巧合 —— General 是最大的那个，任何页切过去都得放大到它，
+required 的下界自然生效。**不要把「现在看着没问题」当成「这一页写对了」。**
+
+修完的实际尺寸（每一页都只有这一个值，与从哪一页切过来无关）：
+
+| 页 | General | Display | Shortcut | Filter | Lab | Source |
+|---|---|---|---|---|---|---|
+| 窗口 | 611×870 | 600×486 | 600×464 | 600×496 | 615×820 | 600×448 |
+
+**Display 的 600 是硬撑出来的**：它的内容其实只要 439 宽，根 view 上那条
+`width == 600 @700`（`dsp-rt-wid`）是为了让它和其余各页一样宽，不然切到这一页时窗口会
+明显缩一截。代价是右侧留白 —— 这是有意的取舍，**不要看到留白就把这条约束删掉**，
+删了它就退回 439。真要消掉留白，得让页里的内容用满这个宽度，而不是动这个数字。
+
+General 的 611 和 Lab 的 615 没有硬撑，是这两页内容自己要的宽度，压不下去。
+
+## 约束优先级为什么是 700
+
+补的尺寸约束用等式 + 优先级 700，两边都卡着：
+
+- **必须 > 500**，否则压不过窗口的 stay-put，等于没补。
+- **必须 < 750**，因为 750 是 `NSTextField` / `NSButton` 默认的**内容压缩阻力**。
+  取 750 会和它打平，Auto Layout 解不出唯一值，实测窗口宽度会在两个值之间漂移
+  （同一页两次运行分别是 335 和 540）。取 700 则本地化后文字变长时压缩阻力赢，
+  窗口自动撑宽，不产生约束冲突。
+
+**不要图省事写成 required。** 那样德语之类的长文本会直接撞出「Unable to simultaneously
+satisfy constraints」。
+
+## 为什么测的是选中页，不是 controller 自己的 view
+
+`resizeWindowToFitSelectedTabViewItem` 量的是 `children[selectedTabViewItemIndex].view`
+的 `fittingSize`，不是 `self.view` 的。
+
+Display 页里套了另一个 `NSTabView`。向外层 view 要 `fittingSize` 时，嵌套 tabView 报的是
+**它当前的尺寸**而不是内容需要的尺寸，于是算出来的目标尺寸恰好等于当前窗口尺寸，
+`guard targetFrame.size != window.frame.size` 直接 return —— 修复静默失效，Display 页
+照旧继承上一页尺寸。改量选中页本身就没这个问题（tabView 是 `noTabsNoBorder`，
+和页面之间没有边距）。
+
+窗口 frame 是自己算的而不是用 `setContentSize`：后者保持左下角不动，窗口会「往上长」，
+标题栏乱跑。这里保持 `maxY` 不变，让窗口向下伸缩。
+
+## 为什么切 tab 没有动画
+
+**目前是瞬间改变窗口尺寸，没有任何动画。** 试过一版
+（`NSAnimationContext` 包窗口 frame，0.25s、ease-in-ease-out，frame 算法和时长取自
+[sindresorhus/Settings](https://github.com/sindresorhus/Settings) 的 `SettingsTabViewController`），
+实际观感被否掉了：只有窗口在动、内容瞬切，反而比不动更难看。**要重做请连内容过渡一起做，
+不要只加窗口动画。**
+
+而内容 crossfade（`transitionOptions = [.crossfade]`）在当前架构下做不出来，试过三种写法都不行：
+
+参考的那个库自己拥有容器，过渡前会把旧页的约束整个摘掉（`view.removeConstraints(activeChildViewConstraints)`），
+过渡期间两个页都不参与布局，窗口尺寸完全由代码说了算。`NSTabViewController` 不给这个机会 ——
+crossfade 期间新旧两页**同时挂在容器里且都受约束**，旧页的 required 约束会把窗口按住不让缩，
+实测窗口动画走到目标尺寸后又弹回原尺寸（870 → 449 → 870）。
+
+试过的绕法和结果：
+
+| 写法 | 结果 |
+|---|---|
+| 在 `transition(from:to:options:)` 里包动画组，先 resize 再 `super` | 目标页还没进层级，`fittingSize` 测不准，Display / Lab 尺寸继承回归 |
+| 同上，改成先 `super` 再 resize | 测量准了，但旧页仍在撑窗口，尺寸继承回归 |
+| 再加 `fromViewController.view.translatesAutoresizingMaskIntoConstraints = true` 把旧页踢出布局 | 动画平滑了，但破坏了页自身的布局，六个 tab 里五个不稳 |
+
+最后落在 `tabView(_:didSelect:)`：这时**新页已进层级并布局完**（`fittingSize` 可信），
+**旧页已被移除**（撑不住窗口了），两个前提同时成立，只有这里成立。代价是内容瞬切、只有窗口是动的。
+
+真要 crossfade，就得像参考库那样彻底接管容器（不再用 `NSTabViewController` 的 tab 切换），
+这笔账要和[提案 0006 设置界面迁 SwiftUI](../Evolutions/0006-swiftui-settings.md) 一起算，
+不值得单独为它重写一遍旧架构。
+
+## 加新 tab 时要注意什么
+
+新页里只要有 `NSScrollView`、`NSTableView`、`NSGridView`、嵌套 `NSTabView`，或任何
+hugging 优先级 ≤ 500 的控件夹在从顶到底（或从左到右）的约束链里，就得给它补一条
+优先级 700 的尺寸等式，否则这一页的尺寸又会跟着来源变。
+
+代码层面的兜底（按 `fittingSize` 定窗口）能保证**尺寸稳定**，但保证不了**尺寸合理** ——
+Source 页没补约束前 `fittingSize` 算出来是 449×294，那是表格被压扁到最小的状态。
+两层都要有。
+
+## 怎么验证
+
+设置界面没有自动化测试。手工验证方式是**逐一从每个 tab 切到每个其他 tab**，确认同一个目的
+tab 的窗口尺寸与来源无关 —— 只切一两次很容易漏掉，因为从「比它小的页」切过去时窗口本来就得放大，
+看起来是对的。
