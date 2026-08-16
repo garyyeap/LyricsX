@@ -5,6 +5,35 @@
         <description>Most recent changes with links to updates.</description>
         <language>en</language>
         <item>
+            <title>1.9.0-beta.11</title>
+            <pubDate>Sun, 16 Aug 2026 12:05:44 +0000</pubDate>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>10900111</sparkle:version>
+            <sparkle:shortVersionString>1.9.0-beta.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>What's New</h2>
+<h3>New</h3>
+<ul>
+<li><strong>Switch to the next lyrics candidate</strong> — results that lose the automatic search are no longer thrown away; every result that clears the search filters now stays in a candidate pool. A new menu item and global shortcut cycle through it, so reaching a rejected candidate no longer means opening the search window and auditioning rows one by one. When the lyrics came from the local cache the pool is empty, so the first press starts a search and switches as soon as a genuinely different candidate arrives, rather than making you wait out a full search. A hand-picked choice is pinned and will not be yanked away by a high-scoring result landing seconds later.</li>
+<li><strong>Lyrics source ordering modes</strong> — the old "enable source priority" checkbox was all-or-nothing: with it on, any result from a higher-listed source beat any result from a lower one and the match score never got a say, so a barely-matching result with half the title right and the duration off by thirty seconds reliably outranked a perfect match from another source. There are now three modes: score only, source first, and a new one where the score leads and the source list only settles scores too close to tell apart. Existing setups migrate to the first two, so nothing reorders on upgrade; the third has to be chosen.</li>
+<li><strong>A switch to ignore the saved lyrics library</strong> — a cache hit short-circuits the entire search, so once a saved file is wrong it stays wrong forever. A new switch on the General page skips that one layer. Embedded lyrics, files sitting beside the track, and anything you picked by hand still come first — those are your files and your decisions, not a cache. A hand-picked choice is recorded inside the lyrics file itself, so it survives a new machine, a restored backup, or a reorganized library. When a search comes back empty the library is read after all, so being offline never drops you from possibly-stale lyrics to none at all.</li>
+<li><strong>Context menu in the lyrics window</strong> — adds Search and Edit. When lyrics are missing, Edit creates a blank lyrics file without overwriting any existing content.</li>
+<li><strong>The floating lyrics window follows you across Spaces.</strong></li>
+<li><strong>The settings toolbar now uses system symbols</strong> in place of the mix of legacy color icons and hand-drawn images.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Several defects in the Apple Music-style lyrics panel: the karaoke sweep never painted, leaving the active line at its un-sung translucent white for the whole song; the non-active lines were dimmed on a distance ramp that was never the intended look, sinking the bottom of the panel into the background; per-character time tags made each character rise, hold and drop on its own instead of flowing as one phrase; and the line-change scroll was stepped by hand from the display link, so load on the panel's own main thread flattened the spring into a near-linear slide.</li>
+<li>Some playback sources briefly report a zero-time state when paused, which sent the desktop and floating lyrics back to the first line.</li>
+<li>The saving-path pop-up resolved its selection differently on the read and write sides, so lyrics were saved into a directory they were never read back from.</li>
+<li>User-owned lyrics files sitting next to a track are no longer rewritten unless you explicitly enable it in General settings.</li>
+<li>The login helper crashed after launching the main app, which made the system treat it as eligible for relaunch and restart it every few seconds — each restart re-opening the already-running app and popping up its settings window.</li>
+<li>The settings window is now sized from the selected tab's own content, so a tab no longer opens at a different size depending on which tab you came from.</li>
+<li>Filled in the missing translations for the lyrics window's context menu.</li>
+</ul>]]></description>
+            <enclosure url="https://github.com/MxIris-LyricsX-Project/LyricsX/releases/download/v1.9.0-beta.11/LyricsX_1.9.0-beta.11+10900111.zip" length="9715959" type="application/octet-stream" sparkle:edSignature="CcQHKvDmzdg3ZemNde6CzowaHOS+NeJFKzqUAklEnRpPc/0Afcxjb0knEavxyu/Xg8qL/zWVkn81I/uegn9OAQ==" />
+        </item>
+        <item>
             <title>1.8.9</title>
             <pubDate>Sun, 19 Jul 2026 14:22:42 +0000</pubDate>
             <sparkle:version>10809999</sparkle:version>
