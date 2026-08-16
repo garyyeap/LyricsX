@@ -87,41 +87,57 @@ advisory, not as a gate. The build is the gate.
 
 A LyricsX release is triggered by pushing a `v*` tag (e.g. `v1.9.0-beta.7`),
 which fires `.github/workflows/release.yml`. CI sets
-`LYRICSX_USE_LOCAL_DEPENDENCY=0`, so it resolves SPM dependencies from
-their **remote tags** (not local checkouts). If a dependency's tag is
-stale relative to its `main`/`master` HEAD, CI will pull an outdated
-version that may be missing products LyricsX needs.
+`LYRICSX_USE_LOCAL_DEPENDENCY=0`, so it resolves the three sibling packages
+from their **published tags**, not from local checkouts.
 
-**Before every LyricsX release, audit these three sibling repos and
-tag any that have unreleased commits — in this order, because
-MusicPlayer depends on mediaremote-adapter, and LyricsX depends on
-both LyricsKit and MusicPlayer:**
+All three are pinned to an **exact version**: `LyricsXPackage/Package.swift`
+carries `exact: "1.11.0"` for LyricsKit and `exact: "1.9.0"` for MusicPlayer,
+and MusicPlayer's own `Package.swift` carries `exact: "0.1.5"` for
+mediaremote-adapter. So nothing moves underneath a release — a dependency
+changes only when someone edits one of those strings, which puts every
+dependency change in `git log`. They used to be `branch:` requirements, where
+a push to the upstream branch silently changed what the next resolve pulled
+and left only a bare SHA in `Package.resolved` to show for it.
+
+**There is therefore no "audit for stale tags" step any more.** Picking up new
+dependency work is deliberate, and goes in this order, because MusicPlayer
+depends on mediaremote-adapter and LyricsX depends on both LyricsKit and
+MusicPlayer:
 
 1. **mediaremote-adapter** (`MxIris-LyricsX-Project/mediaremote-adapter`)
-   — check `master`/`main` vs latest `v*` tag.
-2. **LyricsKit** (`MxIris-LyricsX-Project/LyricsKit`, branch `main`)
-   — check `main` vs latest `v*` tag.
-3. **MusicPlayer** (`MxIris-LyricsX-Project/MusicPlayer`, branch `master`)
-   — check `master` vs latest `v*` tag.
+   — default branch `master`; its tags carry **no** `v` prefix (`0.1.5`).
+2. **LyricsKit** (`MxIris-LyricsX-Project/LyricsKit`) — LyricsX tracks its
+   `develop`, which runs ahead of `main`; tag from `develop`.
+3. **MusicPlayer** (`MxIris-LyricsX-Project/MusicPlayer`) — LyricsX tracks its
+   `develop`. Note `master` and `develop` have **deliberately** diverged on the
+   LXMusicPlayer state-comparison tolerance (`master` restored 1.5s in
+   `ced0ac7`, `develop` chose 0.5s in `e85e8af` and argues the case in its
+   commit message). `develop`'s 0.5s is what ships; this is not a fork to
+   reconcile before releasing.
 
-For each repo that has unreleased commits:
+For each repo whose new work you want to ship:
 
-1. Decide the next version (minor bump for additive product/API, patch
-   for bug fix only, major for breaking changes).
-2. `git tag -a vX.Y.Z -m "X.Y.Z"` and `git push origin vX.Y.Z` in that
-   repo.
+1. Decide the next version (minor bump for additive product/API, patch for
+   bug fix only, major for breaking changes). These libraries release under
+   **plain version numbers — no `-beta.N` suffix**, unlike LyricsX itself.
+2. `git tag -a vX.Y.Z <commit> -m "X.Y.Z"` and `git push origin vX.Y.Z`.
+3. Update the matching `exact:` string — in `LyricsXPackage/Package.swift` for
+   LyricsKit and MusicPlayer, or in MusicPlayer's own `Package.swift` for
+   mediaremote-adapter (which then needs a new MusicPlayer tag of its own).
 
 Then in **this** repo:
 
-3. Bump the SPM `from:` requirement in `LyricsXPackage/Package.swift`
-   if needed (only when the new tag is below the existing floor, or to
-   pin a known-good major).
-4. Run `xcodebuild -resolvePackageDependencies` (or
-   *Update to Latest Package Versions* in Xcode) to refresh
+4. Run `xcodebuild -project LyricsX.xcodeproj -scheme LyricsX
+   -resolvePackageDependencies` to refresh
    `LyricsX.xcodeproj/.../Package.resolved`.
-5. Commit the updated `Package.resolved` and (if changed)
-   `Package.swift`.
-6. Bump `CFBundleShortVersionString` (marketing version) in
+5. **Read the `Package.resolved` diff before committing.** A full resolve also
+   advances every *other* dependency whose `from:` range allows it — the
+   pinning commit itself picked up an unrelated `swift-async-algorithms`
+   1.1.4 → 1.1.5 that had to be reverted by hand. Revert anything you did not
+   intend to ship; a release should not carry dependency movement nobody asked
+   for.
+6. Commit the updated `Package.resolved` and `Package.swift`.
+7. Bump `CFBundleShortVersionString` (marketing version) in
    `LyricsX/Supporting Files/Info.plist` and
    `LyricsXWidget/Supporting Files/Info.plist` if the new version's base
    (`X.Y.Z` portion, stripping any `-beta.N` / `-rc.N` suffix) differs
@@ -130,9 +146,9 @@ Then in **this** repo:
    the encoded scheme (see `Documentations/BuildNumberScheme.md`) and
    overwrites both plists at CI time, so the value committed in the repo
    is informational only.
-7. Add `ReleaseNotes/<version>_en.md` and `ReleaseNotes/<version>_zh.md`,
+8. Add `ReleaseNotes/<version>_en.md` and `ReleaseNotes/<version>_zh.md`,
    following the conventions below.
-8. Push the branch, then tag and push `v<version>` to trigger the
+9. Push the branch, then tag and push `v<version>` to trigger the
    release workflow.
 
 ### Release notes conventions
@@ -158,11 +174,12 @@ Then in **this** repo:
   `Scripts/release/compose-notes.sh` with a `---` separator, so the
   English file goes first.
 
-If you skip step 1-2 and a dependency is missing a needed product, CI
-fails fast in `Build` with
+If the pinned version of a dependency predates a product LyricsX needs — you
+updated the `exact:` string but never pushed the tag, or pointed it at an
+older release — CI fails fast in `Build` with
 `product 'X' required by package 'lyricsxpackage' target 'LyricsXFoundation' not found in package 'Y'`
-— treat that as the signal to go back and tag the dependency, not as a
-LyricsX-side bug.
+— treat that as the signal to go tag the dependency and correct the pin, not
+as a LyricsX-side bug.
 
 ## Architecture
 

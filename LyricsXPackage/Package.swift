@@ -78,7 +78,7 @@ let package = Package(
             ),
             remote: .package(
                 url: "https://github.com/MxIris-LyricsX-Project/LyricsKit",
-                branch: "develop"
+                exact: "1.11.0"
             )
         ),
         .package(
@@ -89,7 +89,7 @@ let package = Package(
             ),
             remote: .package(
                 url: "https://github.com/MxIris-LyricsX-Project/MusicPlayer",
-                branch: "develop"
+                exact: "1.9.0"
             )
         ),
         .package(
