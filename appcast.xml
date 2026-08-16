@@ -30,6 +30,13 @@
 <li>The login helper crashed after launching the main app, which made the system treat it as eligible for relaunch and restart it every few seconds — each restart re-opening the already-running app and popping up its settings window.</li>
 <li>The settings window is now sized from the selected tab's own content, so a tab no longer opens at a different size depending on which tab you came from.</li>
 <li>Filled in the missing translations for the lyrics window's context menu.</li>
+</ul>
+<h3>Acknowledgements</h3>
+<p>Thanks to @vizmoe, whose work ships in this update:</p>
+<ul>
+<li>(#179) keeping the floating lyrics window visible across Spaces</li>
+<li>(#181) the fix for lyrics jumping back to the first line on pause</li>
+<li>(#182) the Search/Edit context menu, and the storage change that keeps lyrics beside a track read-only by default</li>
 </ul>]]></description>
             <enclosure url="https://github.com/MxIris-LyricsX-Project/LyricsX/releases/download/v1.9.0-beta.11/LyricsX_1.9.0-beta.11+10900111.zip" length="9715959" type="application/octet-stream" sparkle:edSignature="CcQHKvDmzdg3ZemNde6CzowaHOS+NeJFKzqUAklEnRpPc/0Afcxjb0knEavxyu/Xg8qL/zWVkn81I/uegn9OAQ==" />
         </item>
