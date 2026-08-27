@@ -219,9 +219,23 @@ class SearchLyricsViewController: NSViewController, NSTableViewDelegate, NSTable
             return searchResult[row].idTags[.artist] ?? "[lacking]"
         case .searchResultColumnSource:
             return searchResult[row].metadata.service ?? "[lacking]"
+        case .searchResultColumnQuality:
+            return qualityDisplayText(for: searchResult[row])
         default:
             return nil
         }
+    }
+
+    // The score the row was ranked by, plus — when the artwork-similarity boost
+    // actually moved it — the part of that score the boost contributed. Without
+    // the second half a boosted row just looks inexplicably good.
+    private func qualityDisplayText(for lyrics: Lyrics) -> String {
+        let total = String(format: "%.2f", effectiveQuality(lyrics))
+        let artworkBonus = effectiveArtworkBonus(lyrics)
+        guard artworkBonus != 0 else {
+            return total
+        }
+        return total + String(format: " (%+.2f)", artworkBonus)
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {

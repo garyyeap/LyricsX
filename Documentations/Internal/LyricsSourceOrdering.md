@@ -86,6 +86,17 @@ return a > b
 （`mode == .sourceFirst`）。理由是降级：装回旧版本时它是唯一能读到的开关。
 第三种模式在旧版没有对应物，映射成「关」而不是「开」—— 那一档里分数说了算，与新模式更接近。
 
+## 分数在搜索面板是看得见的
+
+搜索面板（`SearchLyricsViewController`）的表格有一列 `Score`，显示的就是
+`effectiveQuality` —— 排序真正比较的那个数，不是 LyricsKit 的原始 `quality`。
+封面相似度加分生效时，那一格会写成 `0.92 (+0.15)`，把加分单独摊开。
+
+这一列存在的理由是排查：排序出问题时，最先要分清「分数算错了」还是「比较写错了」，
+而分数不可见的时候这两件事从症状上完全一样。也因此 `effectiveQuality` 与
+`effectiveArtworkBonus` 在 `Global.swift` 里是 internal 而非 private —— 面板要读它们，
+且必须读**同一份**实现，另写一份显示用的算法就等于让显示的分数和排序用的分数各说各话。
+
 ## 已知空白
 
 `lyricsHasHigherPriority` 这一层（读偏好、把 `Lyrics` 摊成分数与源下标）仍然没有自动化测试，

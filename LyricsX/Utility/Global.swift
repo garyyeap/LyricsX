@@ -72,6 +72,7 @@ extension NSUserInterfaceItemIdentifier {
     static let searchResultColumnTitle = NSUserInterfaceItemIdentifier("SearchResult.TableColumn.Title")
     static let searchResultColumnArtist = NSUserInterfaceItemIdentifier("SearchResult.TableColumn.Artist")
     static let searchResultColumnSource = NSUserInterfaceItemIdentifier("SearchResult.TableColumn.Source")
+    static let searchResultColumnQuality = NSUserInterfaceItemIdentifier("SearchResult.TableColumn.Quality")
 }
 
 extension NSStoryboard.SceneIdentifier {
@@ -294,7 +295,9 @@ private func sourcePriorityIndex(of lyrics: Lyrics, in normalizedOrder: [String]
     return normalizedOrder.firstIndex(of: source) ?? LyricsSourceOrderingPolicy.unlistedSourceIndex
 }
 
-private func effectiveQuality(_ lyrics: Lyrics) -> Double {
+// Internal rather than private because the search panel shows this number in
+// its Score column, and it has to show the same one the ordering compares.
+func effectiveQuality(_ lyrics: Lyrics) -> Double {
     // Normalise here rather than leaning on the policy's own guard: NaN would
     // poison the sum, and the policy would then discard the artwork bonus along
     // with it.
@@ -302,7 +305,7 @@ private func effectiveQuality(_ lyrics: Lyrics) -> Double {
     return quality + effectiveArtworkBonus(lyrics)
 }
 
-private func effectiveArtworkBonus(_ lyrics: Lyrics) -> Double {
+func effectiveArtworkBonus(_ lyrics: Lyrics) -> Double {
     guard defaults[.artworkSimilarityBoostEnabled] else { return 0 }
     return lyrics.artworkMatchBonus
 }
