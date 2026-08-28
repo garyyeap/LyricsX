@@ -23,12 +23,14 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-    log_info "Updating existing release ${TAG_NAME}"
+    log_info "Updating existing release ${TAG_NAME} -> ${GITHUB_SHA}"
+    EDIT_ARGS=(--title "$RELEASE_NAME" --target "$GITHUB_SHA")
     if [ "$PRERELEASE" = "true" ]; then
-        gh release edit "$TAG_NAME" --title "$RELEASE_NAME" --prerelease
+        EDIT_ARGS+=(--prerelease)
     else
-        gh release edit "$TAG_NAME" --title "$RELEASE_NAME" --prerelease=false
+        EDIT_ARGS+=(--prerelease=false)
     fi
+    gh release edit "$TAG_NAME" "${EDIT_ARGS[@]}"
     gh release upload "$TAG_NAME" "$ARTIFACT_PATH" --clobber
 else
     log_info "Creating release ${TAG_NAME}"
