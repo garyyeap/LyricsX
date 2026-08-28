@@ -87,7 +87,7 @@ class KaraokeLyricsView: NSView {
         }
     }
 
-    func displayLrc(_ firstLine: String, secondLine: String = "", completion: (() -> Void)? = nil) {
+    func displayLrc(_ firstLine: String, secondLine: String = "") {
         var toBeHide = stackView.arrangedSubviews.compactMap { $0 as? KaraokeLabel }
         var toBeShow: [NSTextField] = []
         var shouldHideAll = false
@@ -136,9 +136,6 @@ class KaraokeLyricsView: NSView {
             layoutSubtreeIfNeeded()
         }, completionHandler: {
             self.mouseTest()
-            DispatchQueue.main.async {
-                completion?()
-            }
         })
     }
 

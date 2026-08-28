@@ -117,6 +117,23 @@ class KaraokeLabel: NSTextField {
 //        return ctFrame
 //    }
 
+    private func ctFrame(_ dirtyRect: NSRect? = nil) -> CTFrame {
+        if let ctFrame = _ctFrame {
+            return ctFrame
+        }
+        if dirtyRect == nil {
+            layoutSubtreeIfNeeded()
+        }
+        let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
+        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
+        let framesetter = CTFramesetter.create(attributedString: attrString)
+        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
+        let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
+        let ctFrame = framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
+        _ctFrame = ctFrame
+        return ctFrame
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         if bounds.size != newSize {
             invalidateFrameCache()
@@ -130,67 +147,6 @@ class KaraokeLabel: NSTextField {
             lastLayoutBounds = bounds.size
             invalidateFrameCache()
         }
-    }
-
-    private func ctFrame() -> CTFrame {
-        if let ctFrame = _ctFrame {
-            return ctFrame
-        }
-        layoutSubtreeIfNeeded()
-        let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
-        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
-        let framesetter = CTFramesetter.create(attributedString: attrString)
-        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
-        let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
-        let ctFrame = framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
-        _ctFrame = ctFrame
-        return ctFrame
-    }
-
-    private func configureFlippedTextContext(_ context: CGContext) {
-        context.textMatrix = .identity
-        context.translateBy(x: 0, y: bounds.height)
-        context.scaleBy(x: 1.0, y: -1.0)
-    }
-
-    private func progressMaskImage(frame: CTFrame, lineBounds: CGRect) -> CGImage? {
-        let labelBounds = bounds
-        guard labelBounds.width > 0, labelBounds.height > 0 else { return nil }
-
-        let cropRect = lineBounds.intersection(CGRect(origin: .zero, size: labelBounds.size))
-        guard !cropRect.isEmpty else { return nil }
-
-        let width = Int(labelBounds.width.rounded(.up))
-        let height = Int(labelBounds.height.rounded(.up))
-        guard width > 0, height > 0 else { return nil }
-
-        let colorSpace = CGColorSpaceCreateDeviceGray()
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else {
-            return nil
-        }
-
-        context.setFillColor(gray: 0, alpha: 0)
-        context.fill(CGRect(origin: .zero, size: labelBounds.size))
-        context.setFillColor(gray: 1, alpha: 1)
-        configureFlippedTextContext(context)
-        CTFrameDraw(frame, context)
-
-        guard let fullImage = context.makeImage() else { return nil }
-        let cropInImageSpace = CGRect(
-            x: cropRect.origin.x,
-            y: labelBounds.height - cropRect.maxY,
-            width: cropRect.width,
-            height: cropRect.height
-        )
-        return fullImage.cropping(to: cropInImageSpace)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -214,11 +170,12 @@ class KaraokeLabel: NSTextField {
 //        image.draw(in: dirtyRect)
         guard let context = NSGraphicsContext.current else { return }
         let cgContext = context.cgContext
-        let frame = ctFrame()
-        configureFlippedTextContext(cgContext)
-        CTFrameDraw(frame, cgContext)
+        cgContext.textMatrix = .identity
+        cgContext.translateBy(x: 0, y: bounds.height)
+        cgContext.scaleBy(x: 1.0, y: -1.0)
+        CTFrameDraw(ctFrame(dirtyRect), cgContext)
 
-        drawRomajiAnnotations(in: cgContext, frame: frame)
+        drawRomajiAnnotations(in: cgContext, frame: ctFrame())
     }
 
     // MARK: - Progress
@@ -271,7 +228,14 @@ class KaraokeLabel: NSTextField {
         progressLayer.backgroundColor = color.cgColor
         let mask = CALayer()
         mask.frame = progressLayer.bounds
-        mask.contents = progressMaskImage(frame: frame, lineBounds: lineBounds)
+        let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
+            let context = NSGraphicsContext.current!.cgContext
+            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
+            context.concatenate(.translate(x: -ori.x, y: -ori.y))
+            CTFrameDraw(frame, context)
+            return true
+        }
+        mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
         progressLayer.mask = mask
 
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
