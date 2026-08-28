@@ -3,11 +3,14 @@ name: Build
 
 on:
   push:
-    branches: [ master, build ]
+    branches: [ master, build, release ]
     tags:
       - 'v*'
   pull_request:
     branches: [ master ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -50,21 +53,24 @@ jobs:
       run: |
         mkdir -p ${{ runner.temp }}/export
         cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "${{ runner.temp }}/export/"
+        cd "${{ runner.temp }}/export"
+        ditto -c -k --sequesterRsrc --keepParent LyricsX.app LyricsX.zip
     
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: LyricsX
-        path: ${{ runner.temp }}/export/LyricsX.app
+        path: ${{ runner.temp }}/export/LyricsX.zip
         retention-days: 30
 
     - name: Create Release
+      if: github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/v')
       uses: softprops/action-gh-release@v2
       with:
-        name: LyricsX ${{ github.ref_name }}
-        tag_name: ${{ github.ref_name }}
+        name: LyricsX ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('latest-build ({0})', github.sha) }}
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-build' }}
         draft: false
-        prerelease: false
-        files: ${{ runner.temp }}/export/LyricsX.app
+        prerelease: ${{ github.ref == 'refs/heads/release' || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
+        files: ${{ runner.temp }}/export/LyricsX.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
