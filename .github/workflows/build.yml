@@ -1,0 +1,70 @@
+name: Build
+
+
+on:
+  push:
+    branches: [ master, build ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Show Xcode version
+      run: |
+        xcodebuild -version
+        swift --version
+    
+    - name: Resolve Swift Package Dependencies
+      run: |
+        xcodebuild -resolvePackageDependencies \
+          -project LyricsX.xcodeproj \
+          -scheme LyricsX \
+          -skipMacroValidation
+    
+    - name: Build
+      run: |
+        xcodebuild build \
+          -project LyricsX.xcodeproj \
+          -scheme LyricsX \
+          -configuration Release \
+          -destination "platform=macOS" \
+          -derivedDataPath ${{ runner.temp }}/DerivedData \
+          -skipMacroValidation \
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+    
+    - name: Prepare Artifact
+      run: |
+        mkdir -p ${{ runner.temp }}/export
+        cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "${{ runner.temp }}/export/"
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LyricsX
+        path: ${{ runner.temp }}/export/LyricsX.app
+        retention-days: 30
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: LyricsX ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: ${{ runner.temp }}/export/LyricsX.app
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
