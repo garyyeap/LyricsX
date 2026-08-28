@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/MxIris-LyricsX-Project/mediaremote-adapter",
       "state" : {
-        "revision" : "b6346e062231d61f70dd025ff98ca56714fc5c12",
-        "version" : "0.1.4"
+        "revision" : "0fa7db9dea7cdb72bbb4090eaccf2355d8e4279e",
+        "version" : "0.1.5"
       }
     },
     {

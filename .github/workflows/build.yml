@@ -1,0 +1,94 @@
+name: Release Build
+
+#   canary -> rolling tag v{base}-canary, dated build label (UTC+8), tag moves each build
+#   beta   -> auto-increment v1.9.0-beta.N
+#   release -> auto-increment stable v1.8.9 -> v1.8.10
+on:
+  push:
+    branches: [ release, beta, canary ]
+  pull_request:
+    branches: [ release, beta, canary ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Resolve release version
+      id: version
+      env:
+        BRANCH_NAME: ${{ github.base_ref || github.ref_name }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: bash Scripts/ci/resolve-branch-release.sh
+
+    - name: Stamp app version
+      env:
+        VERSION: ${{ steps.version.outputs.plist_version }}
+      run: bash Scripts/ci/stamp-channel-version.sh
+
+    - name: Show Xcode version
+      run: |
+        xcodebuild -version
+        swift --version
+        echo "Channel line: ${{ steps.version.outputs.channel_line }}"
+        echo "Release tag: ${{ steps.version.outputs.tag_name }}"
+        echo "App version: ${{ steps.version.outputs.plist_version }}"
+        echo "Artifact: ${{ steps.version.outputs.artifact_name }}"
+
+    - name: Resolve Swift Package Dependencies
+      run: |
+        xcodebuild -resolvePackageDependencies \
+          -project LyricsX.xcodeproj \
+          -scheme LyricsX \
+          -skipMacroValidation
+
+    - name: Build
+      run: |
+        xcodebuild build \
+          -project LyricsX.xcodeproj \
+          -scheme LyricsX \
+          -configuration Release \
+          -destination "platform=macOS" \
+          -derivedDataPath ${{ runner.temp }}/DerivedData \
+          -skipMacroValidation \
+          CODE_SIGN_IDENTITY="-" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: Prepare Artifact
+      run: |
+        mkdir -p ${{ runner.temp }}/export
+        cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "${{ runner.temp }}/export/"
+        cd "${{ runner.temp }}/export"
+        ditto -c -k --sequesterRsrc --keepParent LyricsX.app "${{ steps.version.outputs.artifact_name }}"
+
+    - name: Upload Artifact
+      if: github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.version.outputs.artifact_name }}
+        path: ${{ runner.temp }}/export/${{ steps.version.outputs.artifact_name }}
+        retention-days: 30
+
+    - name: Publish Release
+      if: github.event_name == 'push'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        RELEASE_NAME: ${{ steps.version.outputs.release_name }}
+        ARTIFACT_PATH: ${{ runner.temp }}/export/${{ steps.version.outputs.artifact_name }}
+        PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        ROLLING_TAG: ${{ steps.version.outputs.rolling_tag }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: bash Scripts/ci/publish-channel-release.sh
