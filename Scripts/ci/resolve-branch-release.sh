@@ -120,8 +120,8 @@ case "$BRANCH_NAME" in
 esac
 
 TAG_NAME="v${VERSION}"
-ARTIFACT_NAME="Lyrics-${TAG_NAME}.zip"
-RELEASE_NAME="LyricsX ${TAG_NAME}"
+ARTIFACT_NAME="LyricsX-${TAG_NAME}.zip"
+RELEASE_NAME="${TAG_NAME}"
 
 log_info "Resolved branch=${BRANCH_NAME} tag=${TAG_NAME} artifact=${ARTIFACT_NAME} prerelease=${PRERELEASE}"
 

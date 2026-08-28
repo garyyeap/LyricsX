@@ -1,6 +1,5 @@
 name: Release Build
 
-# Merge into a release channel branch to build and publish automatically:
 #   canary -> v1.9.0-canary.<sha>
 #   beta   -> auto-increment v1.9.0-beta.N
 #   release -> auto-increment stable v1.8.9 -> v1.8.10
