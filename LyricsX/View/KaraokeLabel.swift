@@ -203,10 +203,8 @@ class KaraokeLabel: NSTextField {
     func setProgressAnimation(color: NSColor, progress: [(TimeInterval, Int)]) {
         removeProgressAnimation()
         layoutSubtreeIfNeeded()
-        _ctFrame = nil
-        let frame = ctFrame()
-        guard let line = frame.lines.first,
-              let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
+        guard let line = ctFrame().lines.first,
+              let origin = ctFrame().lineOrigins(range: CFRange(location: 0, length: 1)).first else {
             return
         }
         var lineBounds = line.bounds()
@@ -232,23 +230,14 @@ class KaraokeLabel: NSTextField {
         progressLayer.backgroundColor = color.cgColor
         let mask = CALayer()
         mask.frame = progressLayer.bounds
-        let labelBounds = bounds
-        let img = NSImage(size: labelBounds.size, flipped: false) { _ in
+        let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
             let context = NSGraphicsContext.current!.cgContext
-            self.configureFlippedTextContext(context)
-            CTFrameDraw(frame, context)
+            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
+            context.concatenate(.translate(x: -ori.x, y: -ori.y))
+            CTFrameDraw(self.ctFrame(), context)
             return true
         }
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        let cropRect = lineBounds.intersection(CGRect(origin: .zero, size: labelBounds.size))
-        if labelBounds.width > 0, labelBounds.height > 0, !cropRect.isEmpty {
-            mask.contentsRect = CGRect(
-                x: cropRect.origin.x / labelBounds.width,
-                y: cropRect.origin.y / labelBounds.height,
-                width: cropRect.width / labelBounds.width,
-                height: cropRect.height / labelBounds.height
-            )
-        }
         progressLayer.mask = mask
 
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
