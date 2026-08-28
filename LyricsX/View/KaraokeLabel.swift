@@ -153,31 +153,6 @@ class KaraokeLabel: NSTextField {
         context.scaleBy(x: 1.0, y: -1.0)
     }
 
-    private func drawCTFrame(_ frame: CTFrame, in context: CGContext, offsetTo origin: CGPoint = .zero) {
-        configureFlippedTextContext(context)
-        context.translateBy(x: -origin.x, y: -origin.y)
-        CTFrameDraw(frame, context)
-    }
-
-    private func progressLineBounds(for line: CTLine, origin: CGPoint) -> (frameBounds: CGRect, progressOffset: CGFloat) {
-        var localBounds = line.bounds()
-        if !isVertical {
-            let glyphBounds = line.bounds(options: [.useGlyphPathBounds])
-            if !glyphBounds.isNull {
-                localBounds = glyphBounds
-            }
-        }
-        let progressOffset = isVertical ? -localBounds.origin.y : -localBounds.origin.x
-        var frameBounds = localBounds
-        var transform = CGAffineTransform.translate(x: origin.x, y: origin.y)
-        if isVertical {
-            transform.transform(by: .swap() * .translate(y: -localBounds.width))
-            transform *= .flip(height: bounds.height)
-        }
-        frameBounds.apply(t: transform)
-        return (frameBounds, progressOffset)
-    }
-
     override var intrinsicContentSize: NSSize {
         let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
         let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
@@ -200,7 +175,8 @@ class KaraokeLabel: NSTextField {
         guard let context = NSGraphicsContext.current else { return }
         let cgContext = context.cgContext
         let frame = ctFrame()
-        drawCTFrame(frame, in: cgContext)
+        configureFlippedTextContext(cgContext)
+        CTFrameDraw(frame, cgContext)
 
         drawRomajiAnnotations(in: cgContext, frame: frame)
     }
@@ -233,21 +209,46 @@ class KaraokeLabel: NSTextField {
               let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
             return
         }
-        let (lineBounds, progressOffset) = progressLineBounds(for: line, origin: origin)
+        var lineBounds = line.bounds()
+        let progressOffset: CGFloat
+        if isVertical {
+            progressOffset = 0
+        } else {
+            let glyphBounds = line.bounds(options: [.useGlyphPathBounds])
+            if !glyphBounds.isNull {
+                lineBounds = glyphBounds
+            }
+            progressOffset = -lineBounds.origin.x
+        }
+        var transform = CGAffineTransform.translate(x: origin.x, y: origin.y)
+        if isVertical {
+            transform.transform(by: .swap() * .translate(y: -lineBounds.width))
+            transform *= .flip(height: bounds.height)
+        }
+        lineBounds.apply(t: transform)
 
         progressLayer.anchorPoint = isVertical ? CGPoint(x: 0.5, y: 0) : CGPoint(x: 0, y: 0.5)
         progressLayer.frame = lineBounds
         progressLayer.backgroundColor = color.cgColor
         let mask = CALayer()
         mask.frame = progressLayer.bounds
-        let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
+        let labelBounds = bounds
+        let img = NSImage(size: labelBounds.size, flipped: false) { _ in
             let context = NSGraphicsContext.current!.cgContext
-            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
-            context.concatenate(.translate(x: -ori.x, y: -ori.y))
+            self.configureFlippedTextContext(context)
             CTFrameDraw(frame, context)
             return true
         }
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let cropRect = lineBounds.intersection(CGRect(origin: .zero, size: labelBounds.size))
+        if labelBounds.width > 0, labelBounds.height > 0, !cropRect.isEmpty {
+            mask.contentsRect = CGRect(
+                x: cropRect.origin.x / labelBounds.width,
+                y: cropRect.origin.y / labelBounds.height,
+                width: cropRect.width / labelBounds.width,
+                height: cropRect.height / labelBounds.height
+            )
+        }
         progressLayer.mask = mask
 
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
