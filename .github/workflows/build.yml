@@ -1,6 +1,6 @@
 name: Release Build
 
-#   canary -> rolling tag v{base}-canary, dated build label (UTC+8), tag moves each build
+#   canary -> rolling tag v{base}-canary; title v{base}-canary-YYYY.MM.DD; artifact/plist include SHA
 #   beta   -> auto-increment v1.9.0-beta.N
 #   release -> auto-increment stable v1.8.9 -> v1.8.10
 on:
@@ -46,6 +46,7 @@ jobs:
         echo "Release tag: ${{ steps.version.outputs.tag_name }}"
         echo "App version: ${{ steps.version.outputs.plist_version }}"
         echo "Artifact: ${{ steps.version.outputs.artifact_name }}"
+        echo "Source artifact: ${{ steps.version.outputs.source_artifact_name }}"
 
     - name: Resolve Swift Package Dependencies
       run: |
@@ -73,6 +74,7 @@ jobs:
         cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "${{ runner.temp }}/export/"
         cd "${{ runner.temp }}/export"
         ditto -c -k --sequesterRsrc --keepParent LyricsX.app "${{ steps.version.outputs.artifact_name }}"
+        git archive --format=zip --prefix="LyricsX/" -o "${{ steps.version.outputs.source_artifact_name }}" HEAD
 
     - name: Upload Artifact
       if: github.event_name == 'pull_request'
@@ -89,6 +91,7 @@ jobs:
         TAG_NAME: ${{ steps.version.outputs.tag_name }}
         RELEASE_NAME: ${{ steps.version.outputs.release_name }}
         ARTIFACT_PATH: ${{ runner.temp }}/export/${{ steps.version.outputs.artifact_name }}
+        SOURCE_ARTIFACT_PATH: ${{ runner.temp }}/export/${{ steps.version.outputs.source_artifact_name }}
         PRERELEASE: ${{ steps.version.outputs.prerelease }}
         ROLLING_TAG: ${{ steps.version.outputs.rolling_tag }}
         GITHUB_SHA: ${{ github.sha }}

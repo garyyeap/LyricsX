@@ -7,8 +7,9 @@
 #   GITHUB_OUTPUT path to GitHub Actions output file (optional)
 #
 # Outputs (stdout and GITHUB_OUTPUT when set):
-#   tag_name, version, artifact_name, release_name, prerelease, target_branch,
+#   tag_name, version, artifact_name, source_artifact_name, release_name, prerelease, target_branch,
 #   rolling_tag, channel_line, plist_version
+# Canary: release_name is dated without SHA; version/artifact/plist keep SHA.
 
 set -euo pipefail
 
@@ -250,10 +251,11 @@ case "$BRANCH_NAME" in
         else
             CANARY_BASE="$(stable_base_for_commit "$BUILD_TIP")"
         fi
-        VERSION="${CANARY_BASE}-canary-$(TZ=Asia/Shanghai date +%Y.%m.%d).${SHORT_SHA}"
+        CANARY_DATE="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+        VERSION="${CANARY_BASE}-canary-${CANARY_DATE}.${SHORT_SHA}"
         TAG_NAME="v${CANARY_BASE}-canary"
         ARTIFACT_NAME="LyricsX-v${VERSION}.zip"
-        RELEASE_NAME="v${VERSION}"
+        RELEASE_NAME="v${CANARY_BASE}-canary-${CANARY_DATE}"
         PRERELEASE="true"
         ROLLING_TAG="true"
         ;;
@@ -263,12 +265,14 @@ case "$BRANCH_NAME" in
 esac
 
 PLIST_VERSION="$VERSION"
+SOURCE_ARTIFACT_NAME="${ARTIFACT_NAME%.zip}-source.zip"
 
-log_info "Resolved branch=${BRANCH_NAME} channel_line=${CHANNEL_LINE} tag=${TAG_NAME} release=${RELEASE_NAME} artifact=${ARTIFACT_NAME} plist=${PLIST_VERSION} prerelease=${PRERELEASE} rolling_tag=${ROLLING_TAG}"
+log_info "Resolved branch=${BRANCH_NAME} channel_line=${CHANNEL_LINE} tag=${TAG_NAME} release=${RELEASE_NAME} artifact=${ARTIFACT_NAME} source=${SOURCE_ARTIFACT_NAME} plist=${PLIST_VERSION} prerelease=${PRERELEASE} rolling_tag=${ROLLING_TAG}"
 
 printf 'tag_name=%s\n' "$TAG_NAME"
 printf 'version=%s\n' "$VERSION"
 printf 'artifact_name=%s\n' "$ARTIFACT_NAME"
+printf 'source_artifact_name=%s\n' "$SOURCE_ARTIFACT_NAME"
 printf 'release_name=%s\n' "$RELEASE_NAME"
 printf 'prerelease=%s\n' "$PRERELEASE"
 printf 'target_branch=%s\n' "$BRANCH_NAME"
@@ -281,6 +285,7 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
         printf 'tag_name=%s\n' "$TAG_NAME"
         printf 'version=%s\n' "$VERSION"
         printf 'artifact_name=%s\n' "$ARTIFACT_NAME"
+        printf 'source_artifact_name=%s\n' "$SOURCE_ARTIFACT_NAME"
         printf 'release_name=%s\n' "$RELEASE_NAME"
         printf 'prerelease=%s\n' "$PRERELEASE"
         printf 'target_branch=%s\n' "$BRANCH_NAME"
