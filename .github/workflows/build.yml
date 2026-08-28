@@ -1,6 +1,6 @@
 name: Release Build
 
-#   canary -> rolling tag v{base}-canary; title v{base}-canary-YYYY.MM.DD; artifact/plist include SHA
+#   canary -> rolling tag/title v{base}-canary; artifact/plist include date+SHA
 #   beta   -> auto-increment v1.9.0-beta.N
 #   release -> auto-increment stable v1.8.9 -> v1.8.10
 on:

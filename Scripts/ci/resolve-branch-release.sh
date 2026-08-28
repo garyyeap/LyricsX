@@ -9,7 +9,7 @@
 # Outputs (stdout and GITHUB_OUTPUT when set):
 #   tag_name, version, artifact_name, source_artifact_name, release_name, prerelease, target_branch,
 #   rolling_tag, channel_line, plist_version
-# Canary: release_name is dated without SHA; version/artifact/plist keep SHA.
+# Canary: release_name matches rolling tag; version/artifact/plist keep date+SHA.
 
 set -euo pipefail
 
@@ -255,7 +255,7 @@ case "$BRANCH_NAME" in
         VERSION="${CANARY_BASE}-canary-${CANARY_DATE}.${SHORT_SHA}"
         TAG_NAME="v${CANARY_BASE}-canary"
         ARTIFACT_NAME="LyricsX-v${VERSION}.zip"
-        RELEASE_NAME="v${CANARY_BASE}-canary-${CANARY_DATE}"
+        RELEASE_NAME="${TAG_NAME}"
         PRERELEASE="true"
         ROLLING_TAG="true"
         ;;
