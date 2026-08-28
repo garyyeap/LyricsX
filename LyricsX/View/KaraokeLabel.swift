@@ -149,6 +149,27 @@ class KaraokeLabel: NSTextField {
         }
     }
 
+    private func configureFlippedTextContext(_ context: CGContext) {
+        context.textMatrix = .identity
+        context.translateBy(x: 0, y: bounds.height)
+        context.scaleBy(x: 1.0, y: -1.0)
+    }
+
+    private func drawProgressMask(frame: CTFrame, in context: CGContext, lineBounds: CGRect) {
+        if isVertical {
+            let ori = lineBounds.applying(.flip(height: bounds.height)).origin
+            context.concatenate(.translate(x: -ori.x, y: -ori.y))
+            CTFrameDraw(frame, context)
+            return
+        }
+        configureFlippedTextContext(context)
+        context.translateBy(
+            x: -lineBounds.origin.x,
+            y: -(bounds.height - lineBounds.origin.y - lineBounds.height)
+        )
+        CTFrameDraw(frame, context)
+    }
+
     override var intrinsicContentSize: NSSize {
         let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
         let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
@@ -170,9 +191,7 @@ class KaraokeLabel: NSTextField {
 //        image.draw(in: dirtyRect)
         guard let context = NSGraphicsContext.current else { return }
         let cgContext = context.cgContext
-        cgContext.textMatrix = .identity
-        cgContext.translateBy(x: 0, y: bounds.height)
-        cgContext.scaleBy(x: 1.0, y: -1.0)
+        configureFlippedTextContext(cgContext)
         CTFrameDraw(ctFrame(dirtyRect), cgContext)
 
         drawRomajiAnnotations(in: cgContext, frame: ctFrame())
@@ -230,9 +249,7 @@ class KaraokeLabel: NSTextField {
         mask.frame = progressLayer.bounds
         let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
             let context = NSGraphicsContext.current!.cgContext
-            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
-            context.concatenate(.translate(x: -ori.x, y: -ori.y))
-            CTFrameDraw(frame, context)
+            self.drawProgressMask(frame: frame, in: context, lineBounds: lineBounds)
             return true
         }
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
