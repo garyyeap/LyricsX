@@ -7,7 +7,7 @@
 #   GITHUB_OUTPUT path to GitHub Actions output file (optional)
 #
 # Outputs (stdout and GITHUB_OUTPUT when set):
-#   tag_name, version, artifact_name, release_name, prerelease, target_branch
+#   tag_name, version, artifact_name, release_name, prerelease, target_branch, rolling_tag
 
 set -euo pipefail
 
@@ -87,43 +87,61 @@ resolve_beta_version() {
     printf '%s-beta.1\n' "$base"
 }
 
-resolve_canary_version() {
-    local base
+resolve_canary_base() {
+    local latest
     if latest="$(latest_beta_tag)"; then
         if [[ "$latest" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-beta\.[0-9]+$ ]]; then
-            base="${BASH_REMATCH[1]}"
-            printf '%s-canary.%s\n' "$base" "$SHORT_SHA"
+            printf '%s\n' "${BASH_REMATCH[1]}"
             return 0
         fi
     fi
 
-    base="$(stable_base_from_plist)"
-    printf '%s-canary.%s\n' "$base" "$SHORT_SHA"
+    if latest="$(latest_stable_tag)"; then
+        printf '%s\n' "${latest#v}"
+        return 0
+    fi
+
+    stable_base_from_plist
+}
+
+resolve_canary_build_id() {
+    local base date_stamp
+    base="$(resolve_canary_base)"
+    date_stamp="$(date -u +%Y.%m.%d)"
+    printf '%s-canary-%s.%s\n' "$base" "$date_stamp" "$SHORT_SHA"
 }
 
 case "$BRANCH_NAME" in
     release)
         VERSION="$(resolve_release_version)"
+        TAG_NAME="v${VERSION}"
+        ARTIFACT_NAME="LyricsX-${TAG_NAME}.zip"
+        RELEASE_NAME="${TAG_NAME}"
         PRERELEASE="false"
+        ROLLING_TAG="false"
         ;;
     beta)
         VERSION="$(resolve_beta_version)"
+        TAG_NAME="v${VERSION}"
+        ARTIFACT_NAME="LyricsX-${TAG_NAME}.zip"
+        RELEASE_NAME="${TAG_NAME}"
         PRERELEASE="true"
+        ROLLING_TAG="false"
         ;;
     canary)
-        VERSION="$(resolve_canary_version)"
+        VERSION="$(resolve_canary_build_id)"
+        TAG_NAME="v$(resolve_canary_base)-canary"
+        ARTIFACT_NAME="LyricsX-v${VERSION}.zip"
+        RELEASE_NAME="v${VERSION}"
         PRERELEASE="true"
+        ROLLING_TAG="true"
         ;;
     *)
         die "Unsupported branch for release CI: '${BRANCH_NAME}'"
         ;;
 esac
 
-TAG_NAME="v${VERSION}"
-ARTIFACT_NAME="LyricsX-${TAG_NAME}.zip"
-RELEASE_NAME="${TAG_NAME}"
-
-log_info "Resolved branch=${BRANCH_NAME} tag=${TAG_NAME} artifact=${ARTIFACT_NAME} prerelease=${PRERELEASE}"
+log_info "Resolved branch=${BRANCH_NAME} tag=${TAG_NAME} release=${RELEASE_NAME} artifact=${ARTIFACT_NAME} prerelease=${PRERELEASE} rolling_tag=${ROLLING_TAG}"
 
 printf 'tag_name=%s\n' "$TAG_NAME"
 printf 'version=%s\n' "$VERSION"
@@ -131,6 +149,7 @@ printf 'artifact_name=%s\n' "$ARTIFACT_NAME"
 printf 'release_name=%s\n' "$RELEASE_NAME"
 printf 'prerelease=%s\n' "$PRERELEASE"
 printf 'target_branch=%s\n' "$BRANCH_NAME"
+printf 'rolling_tag=%s\n' "$ROLLING_TAG"
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
@@ -140,5 +159,6 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
         printf 'release_name=%s\n' "$RELEASE_NAME"
         printf 'prerelease=%s\n' "$PRERELEASE"
         printf 'target_branch=%s\n' "$BRANCH_NAME"
+        printf 'rolling_tag=%s\n' "$ROLLING_TAG"
     } >> "$GITHUB_OUTPUT"
 fi

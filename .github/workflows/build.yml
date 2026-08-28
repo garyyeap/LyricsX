@@ -1,6 +1,6 @@
 name: Release Build
 
-#   canary -> v1.9.0-canary.<sha>
+#   canary -> rolling tag v1.9.0-canary, title/file v1.9.0-canary-2026.08.28.<sha>
 #   beta   -> auto-increment v1.9.0-beta.N
 #   release -> auto-increment stable v1.8.9 -> v1.8.10
 on:
@@ -74,15 +74,24 @@ jobs:
         path: ${{ runner.temp }}/export/${{ steps.version.outputs.artifact_name }}
         retention-days: 30
 
+    - name: Update rolling canary tag
+      if: github.event_name == 'push' && steps.version.outputs.rolling_tag == 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git tag -fa "${{ steps.version.outputs.tag_name }}" -m "${{ steps.version.outputs.release_name }}"
+        git push -f origin "${{ steps.version.outputs.tag_name }}"
+
     - name: Create Release
       if: github.event_name == 'push'
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ steps.version.outputs.release_name }}
         tag_name: ${{ steps.version.outputs.tag_name }}
-        target_commitish: ${{ steps.version.outputs.target_branch }}
+        target_commitish: ${{ github.sha }}
         draft: false
         prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+        overwrite_files: ${{ steps.version.outputs.rolling_tag == 'true' }}
         files: ${{ runner.temp }}/export/${{ steps.version.outputs.artifact_name }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
