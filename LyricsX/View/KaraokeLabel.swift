@@ -153,6 +153,46 @@ class KaraokeLabel: NSTextField {
         context.scaleBy(x: 1.0, y: -1.0)
     }
 
+    private func progressMaskImage(frame: CTFrame, lineBounds: CGRect) -> CGImage? {
+        let labelBounds = bounds
+        guard labelBounds.width > 0, labelBounds.height > 0 else { return nil }
+
+        let cropRect = lineBounds.intersection(CGRect(origin: .zero, size: labelBounds.size))
+        guard !cropRect.isEmpty else { return nil }
+
+        let width = Int(labelBounds.width.rounded(.up))
+        let height = Int(labelBounds.height.rounded(.up))
+        guard width > 0, height > 0 else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceGray()
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else {
+            return nil
+        }
+
+        context.setFillColor(gray: 0, alpha: 0)
+        context.fill(CGRect(origin: .zero, size: labelBounds.size))
+        context.setFillColor(gray: 1, alpha: 1)
+        configureFlippedTextContext(context)
+        CTFrameDraw(frame, context)
+
+        guard let fullImage = context.makeImage() else { return nil }
+        let cropInImageSpace = CGRect(
+            x: cropRect.origin.x,
+            y: labelBounds.height - cropRect.maxY,
+            width: cropRect.width,
+            height: cropRect.height
+        )
+        return fullImage.cropping(to: cropInImageSpace)
+    }
+
     override var intrinsicContentSize: NSSize {
         let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
         let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
@@ -203,8 +243,9 @@ class KaraokeLabel: NSTextField {
     func setProgressAnimation(color: NSColor, progress: [(TimeInterval, Int)]) {
         removeProgressAnimation()
         layoutSubtreeIfNeeded()
-        guard let line = ctFrame().lines.first,
-              let origin = ctFrame().lineOrigins(range: CFRange(location: 0, length: 1)).first else {
+        let frame = ctFrame()
+        guard let line = frame.lines.first,
+              let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
             return
         }
         var lineBounds = line.bounds()
@@ -230,14 +271,7 @@ class KaraokeLabel: NSTextField {
         progressLayer.backgroundColor = color.cgColor
         let mask = CALayer()
         mask.frame = progressLayer.bounds
-        let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
-            let context = NSGraphicsContext.current!.cgContext
-            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
-            context.concatenate(.translate(x: -ori.x, y: -ori.y))
-            CTFrameDraw(self.ctFrame(), context)
-            return true
-        }
-        mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        mask.contents = progressMaskImage(frame: frame, lineBounds: lineBounds)
         progressLayer.mask = mask
 
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
