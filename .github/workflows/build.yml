@@ -70,11 +70,13 @@ jobs:
 
     - name: Prepare Artifact
       run: |
-        mkdir -p ${{ runner.temp }}/export
-        cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "${{ runner.temp }}/export/"
-        cd "${{ runner.temp }}/export"
+        export_dir="${{ runner.temp }}/export"
+        mkdir -p "$export_dir"
+        cp -R "${{ runner.temp }}/DerivedData/Build/Products/Release/LyricsX.app" "$export_dir/"
+        cd "$export_dir"
         ditto -c -k --sequesterRsrc --keepParent LyricsX.app "${{ steps.version.outputs.artifact_name }}"
-        git archive --format=zip --prefix="LyricsX/" -o "${{ steps.version.outputs.source_artifact_name }}" HEAD
+        git -C "$GITHUB_WORKSPACE" archive --format=zip --prefix="LyricsX/" \
+          -o "$export_dir/${{ steps.version.outputs.source_artifact_name }}" HEAD
 
     - name: Upload Artifact
       if: github.event_name == 'pull_request'
