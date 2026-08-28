@@ -59,6 +59,7 @@ class KaraokeLabel: NSTextField {
 
     private var _attrString: NSAttributedString?
     private var romajinAnnotations: [(String, NSRange)] = []
+    private var lastLayoutBounds: NSSize = .zero
 
     private var attrString: NSAttributedString {
         if let attrString = _attrString {
@@ -112,21 +113,62 @@ class KaraokeLabel: NSTextField {
 //        return ctFrame
 //    }
 
-    private func ctFrame(_ dirtyRect: NSRect? = nil) -> CTFrame {
+    override func setFrameSize(_ newSize: NSSize) {
+        if bounds.size != newSize {
+            clearCache()
+        }
+        super.setFrameSize(newSize)
+    }
+
+    override func layout() {
+        super.layout()
+        if lastLayoutBounds != bounds.size {
+            lastLayoutBounds = bounds.size
+            clearCache()
+        }
+    }
+
+    private func ctFrame() -> CTFrame {
         if let ctFrame = _ctFrame {
             return ctFrame
         }
-        if dirtyRect == nil {
-            layoutSubtreeIfNeeded()
-        }
+        layoutSubtreeIfNeeded()
         let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
         let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
         let framesetter = CTFramesetter.create(attributedString: attrString)
-        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: (dirtyRect ?? bounds).size, frameAttributes: frameAttr)
+        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
         let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
         let ctFrame = framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
         _ctFrame = ctFrame
         return ctFrame
+    }
+
+    private func configureFlippedTextContext(_ context: CGContext) {
+        context.textMatrix = .identity
+        context.translateBy(x: 0, y: bounds.height)
+        context.scaleBy(x: 1.0, y: -1.0)
+    }
+
+    private func drawCTFrame(_ frame: CTFrame, in context: CGContext, offsetTo origin: CGPoint = .zero) {
+        configureFlippedTextContext(context)
+        context.translateBy(x: -origin.x, y: -origin.y)
+        CTFrameDraw(frame, context)
+    }
+
+    private func progressLineBounds(for line: CTLine, origin: CGPoint) -> (frameBounds: CGRect, xOffset: CGFloat) {
+        var localBounds = line.bounds(options: [.useGlyphPathBounds])
+        if localBounds.isNull {
+            localBounds = line.bounds()
+        }
+        let xOffset = -localBounds.origin.x
+        var frameBounds = localBounds
+        var transform = CGAffineTransform.translate(x: origin.x, y: origin.y)
+        if isVertical {
+            transform.transform(by: .swap() * .translate(y: -localBounds.width))
+            transform *= .flip(height: bounds.height)
+        }
+        frameBounds.apply(t: transform)
+        return (frameBounds, xOffset)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -150,12 +192,10 @@ class KaraokeLabel: NSTextField {
 //        image.draw(in: dirtyRect)
         guard let context = NSGraphicsContext.current else { return }
         let cgContext = context.cgContext
-        cgContext.textMatrix = .identity
-        cgContext.translateBy(x: 0, y: bounds.height)
-        cgContext.scaleBy(x: 1.0, y: -1.0)
-        CTFrameDraw(ctFrame(dirtyRect), cgContext)
+        let frame = ctFrame()
+        drawCTFrame(frame, in: cgContext)
 
-        drawRomajiAnnotations(in: cgContext, frame: ctFrame())
+        drawRomajiAnnotations(in: cgContext, frame: frame)
     }
 
     // MARK: - Progress
@@ -179,35 +219,31 @@ class KaraokeLabel: NSTextField {
 
     func setProgressAnimation(color: NSColor, progress: [(TimeInterval, Int)]) {
         removeProgressAnimation()
-        guard let line = ctFrame().lines.first,
-              let origin = ctFrame().lineOrigins(range: CFRange(location: 0, length: 1)).first else {
+        layoutSubtreeIfNeeded()
+        _ctFrame = nil
+        let frame = ctFrame()
+        guard let line = frame.lines.first,
+              let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
             return
         }
-        var lineBounds = line.bounds()
-        var transform = CGAffineTransform.translate(x: origin.x, y: origin.y)
-        if isVertical {
-            transform.transform(by: .swap() * .translate(y: -lineBounds.width))
-            transform *= .flip(height: bounds.height)
-        }
-        lineBounds.apply(t: transform)
+        let (lineBounds, xOffset) = progressLineBounds(for: line, origin: origin)
 
         progressLayer.anchorPoint = isVertical ? CGPoint(x: 0.5, y: 0) : CGPoint(x: 0, y: 0.5)
         progressLayer.frame = lineBounds
         progressLayer.backgroundColor = color.cgColor
         let mask = CALayer()
         mask.frame = progressLayer.bounds
+        let flippedOrigin = lineBounds.applying(.flip(height: bounds.height)).origin
         let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
             let context = NSGraphicsContext.current!.cgContext
-            let ori = lineBounds.applying(.flip(height: self.bounds.height)).origin
-            context.concatenate(.translate(x: -ori.x, y: -ori.y))
-            CTFrameDraw(self.ctFrame(), context)
+            self.drawCTFrame(frame, in: context, offsetTo: flippedOrigin)
             return true
         }
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
         progressLayer.mask = mask
 
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
-        var map = progress.map { ($0.0, line.offset(charIndex: $0.1).primary) }
+        var map = progress.map { ($0.0, line.offset(charIndex: $0.1).primary + xOffset) }
         if index > 0 {
             let progress = map[index - 1].1 + CGFloat(map[index - 1].0) * (map[index].1 - map[index - 1].1) / CGFloat(map[index].0 - map[index - 1].0)
             map.replaceSubrange(..<index, with: [(0, progress)])

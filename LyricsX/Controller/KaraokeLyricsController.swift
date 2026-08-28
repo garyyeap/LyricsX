@@ -149,9 +149,13 @@ class KaraokeLyricsWindowController: NSWindowController {
         }
 
         DispatchQueue.main.async {
-            self.lyricsView.displayLrc(firstLine, secondLine: secondLine)
-            if let upperTextField = self.lyricsView.displayLine1,
-               let timetag = lrc.attachments.timetag {
+            self.lyricsView.displayLrc(firstLine, secondLine: secondLine) { [weak self] in
+                guard let self,
+                      let upperTextField = self.lyricsView.displayLine1,
+                      upperTextField.stringValue == firstLine,
+                      let timetag = lrc.attachments.timetag else {
+                    return
+                }
                 let position = selectedPlayer.playbackTime
                 let timeDelay = AppController.shared.currentLyrics?.adjustedTimeDelay ?? 0
                 let progress = timetag.tags.map { ($0.time + lrc.position - timeDelay - position, $0.index) }
