@@ -149,10 +149,11 @@ class KaraokeLyricsWindowController: NSWindowController {
         }
 
         DispatchQueue.main.async {
+            let expectedLineIndex = index
             self.lyricsView.displayLrc(firstLine, secondLine: secondLine) { [weak self] in
                 guard let self,
+                      AppController.shared.currentLineIndex == expectedLineIndex,
                       let upperTextField = self.lyricsView.displayLine1,
-                      upperTextField.stringValue == firstLine,
                       let timetag = lrc.attachments.timetag else {
                     return
                 }
