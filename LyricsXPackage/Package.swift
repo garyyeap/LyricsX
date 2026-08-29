@@ -102,7 +102,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/Lakr233/ColorfulX",
-            from: "6.1.0"
+            exact: "5.6.4"
         ),
         .package(
             url: "https://github.com/Lakr233/MSDisplayLink",

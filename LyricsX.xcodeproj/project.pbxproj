@@ -616,8 +616,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/Lakr233/ColorfulX";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.1.0;
+				kind = exactVersion;
+				version = 5.6.4;
 			};
 		};
 		BB6C75E6248B908500804AEB /* XCRemoteSwiftPackageReference "TouchBarHelper" */ = {
