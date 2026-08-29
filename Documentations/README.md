@@ -21,6 +21,8 @@
     且录制控件自绘、不跟随系统外观，换成 KeyboardShortcuts。
   - [0006 设置界面迁移到 SwiftUI](Evolutions/0006-swiftui-settings.md) —— 参照 RuntimeViewer 的
     设置模块架构逐页迁移，最低系统提到 macOS 14。
+  - [0007 对齐 Apple Music 26.6 歌词动画](Evolutions/0007-apple-music-lyrics-animation-parity.md)
+    —— 保存 Apple Music TTML 的 word/syllable timing，并对齐主歌词的逐字、行间与 blur 动画。
 
 ## 实现说明
 
@@ -34,6 +36,9 @@
 - [设置窗口的尺寸](Internal/PreferenceWindowSizing.md) —— 切 tab 时窗口为什么会沿用上一页的
   尺寸，补的约束优先级为什么必须卡在 500 和 750 之间，量的为什么是选中页而不是 controller
   自己的 view，以及切 tab 为什么没有动画（试过的三种写法各自怎么失败的）。
+- [Apple Music 26.6 歌词动画](Internal/AppleMusicLyricsAnimation.md) —— TTML 的 word/syllable timing
+  如何经过 LRCX 保存，行内 factor、clip bounds spring、`.topRelative(40)`、多行坐标与 contextual blur
+  如何落地，以及 AppKit view geometry 和 Core Animation presentation 各自拥有什么状态。
 
 ## 术语
 

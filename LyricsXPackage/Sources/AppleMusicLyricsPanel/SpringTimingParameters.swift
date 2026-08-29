@@ -46,6 +46,20 @@ extension AppleMusicLyrics {
             self.settlingDuration = probe.settlingDuration
         }
 
+        init(mass: CGFloat, stiffness: CGFloat, damping: CGFloat, initialVelocity: CGFloat = 0) {
+            self.mass = mass
+            self.stiffness = stiffness
+            self.damping = damping
+            self.initialVelocity = initialVelocity
+
+            let probe = CASpringAnimation()
+            probe.mass = mass
+            probe.stiffness = stiffness
+            probe.damping = damping
+            probe.initialVelocity = initialVelocity
+            self.settlingDuration = probe.settlingDuration
+        }
+
         func makeAnimation(keyPath: String) -> CASpringAnimation {
             let animation = CASpringAnimation(keyPath: keyPath)
             animation.mass = mass

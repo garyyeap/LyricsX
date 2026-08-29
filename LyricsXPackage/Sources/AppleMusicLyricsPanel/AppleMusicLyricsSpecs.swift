@@ -65,10 +65,10 @@ extension AppleMusicLyrics {
         /// found in the disassembly, this factor reproduces the *screen*, which
         /// is the part that can be checked.
         static let renderedBlurRadiusScale: CGFloat = 0.625
-        /// First field of the timing Music passes to its animator for the blur and
-        /// the accompanying brightness change. The rest of that payload selects a
-        /// timing case we have not decoded, so the curve here is our own.
-        static let lineBlurAnimationDuration: TimeInterval = 0.33
+        /// Duration and cubic curve used for `filters.gaussianBlur.inputRadius`.
+        static let lineBlurAnimationDuration: TimeInterval = 0.12
+        static let lineBlurTimingControlPoint1 = CGPoint(x: 0.33, y: 0)
+        static let lineBlurTimingControlPoint2 = CGPoint(x: 0.2, y: 0.1)
 
         // MARK: Literals compiled into the animation code
 

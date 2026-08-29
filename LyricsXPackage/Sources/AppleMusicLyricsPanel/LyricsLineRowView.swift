@@ -35,6 +35,8 @@ extension AppleMusicLyrics {
         private(set) var isHighlighted = false
         private var karaokeFraction: CGFloat = 0
         private var blurRadius: CGFloat = 0
+        private var blurAnimationGeneration = 0
+        private var rasterizationStateBeforeBlurAnimation: Bool?
 
         // MARK: Cached layout
 
@@ -170,15 +172,24 @@ extension AppleMusicLyrics {
             return ceil(height)
         }
 
+        /// Distance from the row's top edge to the first main-text baseline.
+        /// The container uses this to translate Music's text-relative anchor into
+        /// this view's padded coordinate system.
+        var mainTextFirstBaselineOffset: CGFloat {
+            let mainFont = NSFont.systemFont(ofSize: mainFontSize, weight: .bold)
+            return verticalPadding + mainFont.ascender
+        }
+
         override func layout() {
             super.layout()
             buildLayoutIfNeeded(forWidth: bounds.width)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            // The content layer's children are laid out y-down to match this
-            // flipped view. AppKit already flips the backing layer of a flipped
-            // view, so cancel that out rather than assuming either way.
-            contentLayer.isGeometryFlipped = !(layer?.isGeometryFlipped ?? false)
+            // `LineTextLayout` has already converted Core Text's coordinates into
+            // a y-down space. Keep that contract deterministic for this custom
+            // sublayer; deriving it from AppKit's backing-layer projection reverses
+            // the visual row order whenever a lyric wraps.
+            contentLayer.isGeometryFlipped = true
             contentLayer.anchorPoint = .zero
             // The layer is bigger than the text it holds — see `textOutset` — so
             // back the origin off by that much to put the *text* on the padding.
@@ -207,6 +218,8 @@ extension AppleMusicLyrics {
                 attributed: mainAttributed,
                 content: line.content,
                 wordTimings: line.wordTimingEntries ?? [],
+                synchronizedTextTiming: line.synchronizedTextTiming,
+                languageIdentifier: line.lyrics?.idTags[.init("lang")],
                 lineDuration: line.timetagDuration ?? 0,
                 textWidth: textWidth
             )
@@ -282,7 +295,7 @@ extension AppleMusicLyrics {
 
         // MARK: Blur
 
-        /// Blur everything but the line being sung, the way Apple Music does.
+        /// Apply the radius selected by the current contextual blur plan.
         ///
         /// `SyncedLyricsLineLayer` carries a Gaussian blur filter for its whole
         /// life and only ever animates the radius — `sub_10019EBAC` writes
@@ -292,24 +305,57 @@ extension AppleMusicLyrics {
         /// Review), so the filter type, the key path, and the render-server-side
         /// evaluation are all Music's own — no `layerUsesCoreImageFilters`, no
         /// in-process Core Image pass.
-        func setLineBlurred(_ blurred: Bool, animated: Bool) {
-            let musicRadius = min(blurred ? LyricsSpecs.deselectedLineBlurRadius : 0, LyricsSpecs.maximumLineBlurRadius)
+        func setLineBlurRadius(_ requestedRadius: CGFloat, animated: Bool) {
+            let musicRadius = min(max(0, requestedRadius), LyricsSpecs.maximumLineBlurRadius)
             let target = musicRadius * LyricsSpecs.renderedBlurRadiusScale
             guard target != blurRadius, let layer, installBlurFilterIfNeeded() else { return }
-            let previous = blurRadius
+            let visibleRadius = (layer.presentation()?.value(forKeyPath: Self.blurRadiusKeyPath) as? NSNumber)
+                .map(CGFloat.init(truncating:)) ?? blurRadius
             blurRadius = target
+            blurAnimationGeneration += 1
+            let animationGeneration = blurAnimationGeneration
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.setValue(target, forKeyPath: Self.blurRadiusKeyPath)
+            CATransaction.commit()
 
             if animated {
+                if rasterizationStateBeforeBlurAnimation == nil {
+                    rasterizationStateBeforeBlurAnimation = layer.shouldRasterize
+                }
+                layer.shouldRasterize = false
                 let animation = CABasicAnimation(keyPath: Self.blurRadiusKeyPath)
-                animation.fromValue = previous
+                animation.fromValue = visibleRadius
                 animation.toValue = target
                 animation.duration = LyricsSpecs.lineBlurAnimationDuration
-                animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                animation.timingFunction = CAMediaTimingFunction(
+                    controlPoints: Float(LyricsSpecs.lineBlurTimingControlPoint1.x),
+                    Float(LyricsSpecs.lineBlurTimingControlPoint1.y),
+                    Float(LyricsSpecs.lineBlurTimingControlPoint2.x),
+                    Float(LyricsSpecs.lineBlurTimingControlPoint2.y)
+                )
                 layer.add(animation, forKey: Self.blurRadiusKeyPath)
+                let restorationDeadline = DispatchTime.now() + LyricsSpecs.lineBlurAnimationDuration
+                DispatchQueue.main.asyncAfter(deadline: restorationDeadline) { [weak self, weak layer] in
+                    guard let self,
+                          let layer,
+                          self.blurAnimationGeneration == animationGeneration
+                    else {
+                        return
+                    }
+                    if let rasterizationStateBeforeBlurAnimation = self.rasterizationStateBeforeBlurAnimation {
+                        layer.shouldRasterize = rasterizationStateBeforeBlurAnimation
+                    }
+                    self.rasterizationStateBeforeBlurAnimation = nil
+                }
             } else {
                 layer.removeAnimation(forKey: Self.blurRadiusKeyPath)
+                if let rasterizationStateBeforeBlurAnimation {
+                    layer.shouldRasterize = rasterizationStateBeforeBlurAnimation
+                    self.rasterizationStateBeforeBlurAnimation = nil
+                }
             }
-            layer.setValue(target, forKeyPath: Self.blurRadiusKeyPath)
         }
 
         /// The filter's `name` is what makes the key path above resolve, so the
@@ -351,6 +397,7 @@ extension AppleMusicLyrics {
                 elapsedTime: elapsedTime,
                 lineDuration: lineDuration,
                 wordTimings: line.wordTimingEntries ?? [],
+                synchronizedTextTiming: line.synchronizedTextTiming,
                 totalCharacterCount: line.content.count,
                 mode: mode
             )

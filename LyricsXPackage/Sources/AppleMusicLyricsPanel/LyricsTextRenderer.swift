@@ -28,6 +28,7 @@ extension AppleMusicLyrics {
             elapsedTime: TimeInterval,
             lineDuration: TimeInterval,
             wordTimings: [WordTimingEntry],
+            synchronizedTextTiming: LyricsLine.Attachments.SynchronizedTextTiming? = nil,
             totalCharacterCount: Int,
             mode: KaraokeMode
         ) -> CGFloat {
@@ -40,6 +41,7 @@ extension AppleMusicLyrics {
                 elapsedTime: elapsedTime,
                 lineDuration: lineDuration,
                 wordTimings: wordTimings,
+                synchronizedTextTiming: synchronizedTextTiming,
                 totalCharacterCount: totalCharacterCount,
                 mode: mode
             )
@@ -50,9 +52,20 @@ extension AppleMusicLyrics {
             elapsedTime: TimeInterval,
             lineDuration: TimeInterval,
             wordTimings: [WordTimingEntry],
+            synchronizedTextTiming: LyricsLine.Attachments.SynchronizedTextTiming?,
             totalCharacterCount: Int,
             mode: KaraokeMode
         ) -> CGFloat {
+            if let synchronizedTextTiming,
+               synchronizedTextTiming.isValid(forCharacterCount: totalCharacterCount) {
+                return synchronizedFraction(
+                    elapsedTime: elapsedTime,
+                    timing: synchronizedTextTiming,
+                    totalCharacterCount: totalCharacterCount,
+                    mode: mode
+                )
+            }
+
             guard lineDuration > 0 else { return 0 }
 
             guard !wordTimings.isEmpty else {
@@ -91,12 +104,70 @@ extension AppleMusicLyrics {
             // Past all words.
             return 1.0
         }
+
+        private static func synchronizedFraction(
+            elapsedTime: TimeInterval,
+            timing: LyricsLine.Attachments.SynchronizedTextTiming,
+            totalCharacterCount: Int,
+            mode: KaraokeMode
+        ) -> CGFloat {
+            guard totalCharacterCount > 0 else { return 0 }
+
+            switch mode {
+            case .wordLevel:
+                for word in timing.words {
+                    if elapsedTime < word.timeRange.lowerBound {
+                        return CGFloat(word.characterRange.lowerBound) / CGFloat(totalCharacterCount)
+                    }
+                    if elapsedTime <= word.timeRange.upperBound {
+                        return CGFloat(word.characterRange.upperBound) / CGFloat(totalCharacterCount)
+                    }
+                }
+            case .characterLevel:
+                for word in timing.words {
+                    let syllables = word.syllables.isEmpty
+                        ? [LyricsLine.Attachments.SynchronizedTextTiming.Syllable(
+                            characterRange: word.characterRange,
+                            timeRange: word.timeRange
+                        )]
+                        : word.syllables
+                    for syllable in syllables {
+                        if elapsedTime < syllable.timeRange.lowerBound {
+                            return CGFloat(syllable.characterRange.lowerBound) / CGFloat(totalCharacterCount)
+                        }
+                        if elapsedTime <= syllable.timeRange.upperBound {
+                            let duration = syllable.timeRange.upperBound - syllable.timeRange.lowerBound
+                            guard duration > 0 else {
+                                return CGFloat(syllable.characterRange.upperBound) / CGFloat(totalCharacterCount)
+                            }
+                            let progress = min(
+                                1,
+                                max(0, (elapsedTime - syllable.timeRange.lowerBound) / duration)
+                            )
+                            let startingFraction = CGFloat(syllable.characterRange.lowerBound)
+                                / CGFloat(totalCharacterCount)
+                            let endingFraction = CGFloat(syllable.characterRange.upperBound)
+                                / CGFloat(totalCharacterCount)
+                            return startingFraction + CGFloat(progress) * (endingFraction - startingFraction)
+                        }
+                    }
+                }
+            }
+
+            return 1
+        }
     }
 }
 
 // MARK: - Helper to Extract Word Timings from LyricsKit InlineTimeTag
 
 extension LyricsLine {
+    var synchronizedTextTiming: LyricsLine.Attachments.SynchronizedTextTiming? {
+        let timing = attachments.synchronizedTextTiming
+        guard timing?.isValid(forCharacterCount: content.count) == true else { return nil }
+        return timing
+    }
+
     var wordTimingEntries: [AppleMusicLyrics.WordTimingEntry]? {
         guard let timetag = attachments.timetag else { return nil }
         return timetag.tags.map { tag in
@@ -105,6 +176,6 @@ extension LyricsLine {
     }
 
     var timetagDuration: TimeInterval? {
-        return attachments.timetag?.duration
+        return synchronizedTextTiming?.duration ?? attachments.timetag?.duration
     }
 }

@@ -37,9 +37,11 @@ extension AppleMusicLyrics {
             /// Set once the word's emphasis batch has been scheduled, so a display
             /// link running at 120Hz does not re-schedule it 120 times a second.
             var isEmphasisScheduled = false
-            /// The pending "travel back to rest" batch, kept so it can be cancelled
-            /// if the line is recycled mid-word.
-            var pendingReturn: DispatchWorkItem?
+            /// Pending "travel back to rest" work, kept so it can be cancelled if
+            /// the line is recycled mid-word.
+            var pendingGlyphReturns: [DispatchWorkItem] = []
+            /// Glow has its own slower spring and lifecycle in Music.
+            var pendingDeglow: DispatchWorkItem?
 
             init(
                 word: LineTextLayout.Word,
@@ -80,16 +82,11 @@ extension AppleMusicLyrics {
             didSet {
                 guard isHighlighted != oldValue else { return }
                 progressGradientLayers.forEach { $0.isHidden = !isHighlighted }
-                if !isHighlighted { resetEmphasis() }
+                if !isHighlighted {
+                    resetEmphasis()
+                }
             }
         }
-
-        /// Interpolation factor for `emphasizingScaleRange` and `glowRange`.
-        ///
-        /// Music stores this per word and we have not yet recovered where it comes
-        /// from, so this is the full-emphasis default. Everything else about the
-        /// schedule is Music's; only the amplitude is assumed.
-        var emphasisFactor: CGFloat = 1
 
         // MARK: Layers
 
@@ -98,6 +95,8 @@ extension AppleMusicLyrics {
         private var progressGradientLayers: [LineProgressGradientLayer] = []
         private var wordNodes: [WordNode] = []
         private var layout: LineTextLayout?
+        private var precedingElapsedTime: TimeInterval?
+        private static let maximumContinuousElapsedTimeStep: TimeInterval = 0.5
         /// Cumulative text width before each visual row, so the sweep cascades row
         /// by row instead of lighting every wrapped row at once.
         private var cumulativeWidthBeforeRow: [CGFloat] = []
@@ -182,6 +181,12 @@ extension AppleMusicLyrics {
             let wordLayer = NoAnimationLayer()
             wordLayer.frame = CGRect(origin: .zero, size: paddedFrame.size)
             wordLayer.contentsScale = contentsScale
+            wordLayer.shouldRasterize = true
+            wordLayer.rasterizationScale = contentsScale
+            wordLayer.shadowColor = CGColor(gray: 1, alpha: 1)
+            wordLayer.shadowRadius = LyricsSpecs.glowRadius
+            wordLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
+            wordLayer.shadowOffset = .zero
 
             var glyphLayers: [GlyphRunLayer] = []
             for glyph in word.glyphs {
@@ -192,15 +197,9 @@ extension AppleMusicLyrics {
                     contentsScale: contentsScale
                 )
                 glyphLayer.frame = glyph.frame.offsetBy(dx: glyphOffset.x, dy: glyphOffset.y)
-                // Music hangs the glow on the *word* layer, which works there only
-                // because it also rasterizes it — a layer that has sublayers but no
-                // content of its own casts a shadow shaped like its bounds, which
-                // inside a mask shows up as a bright rectangle behind the word. The
-                // glyph layers have real drawn content, so their shadow follows the
-                // letter outline with no rasterization and no artefact.
-                glyphLayer.shadowColor = CGColor(gray: 1, alpha: 1)
-                glyphLayer.shadowRadius = LyricsSpecs.glowRadius
-                glyphLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
+                glyphLayer.shadowColor = nil
+                glyphLayer.shadowRadius = 0
+                glyphLayer.shadowOpacity = 0
                 glyphLayer.shadowOffset = .zero
                 wordLayer.addSublayer(glyphLayer)
                 glyphLayers.append(glyphLayer)
@@ -271,8 +270,28 @@ extension AppleMusicLyrics {
         /// comparisons even at 120Hz.
         func update(elapsedTime: TimeInterval, fillFraction: CGFloat) {
             guard let layout, isHighlighted else { return }
+            if shouldSynchronizeEmphasisState(forElapsedTime: elapsedTime) {
+                synchronizeEmphasisState(forElapsedTime: elapsedTime)
+            }
+            precedingElapsedTime = elapsedTime
             updateSweep(layout: layout, fillFraction: fillFraction)
             scheduleDueWords(elapsedTime: elapsedTime)
+        }
+
+        private func shouldSynchronizeEmphasisState(forElapsedTime elapsedTime: TimeInterval) -> Bool {
+            guard let precedingElapsedTime else { return true }
+            return elapsedTime < precedingElapsedTime - 0.1
+                || elapsedTime - precedingElapsedTime > Self.maximumContinuousElapsedTimeStep
+        }
+
+        private func synchronizeEmphasisState(forElapsedTime elapsedTime: TimeInterval) {
+            resetEmphasis()
+            for node in wordNodes {
+                if let timeRange = node.word.timeRange,
+                   timeRange.upperBound <= elapsedTime {
+                    node.isEmphasisScheduled = true
+                }
+            }
         }
 
         private func updateSweep(layout: LineTextLayout, fillFraction: CGFloat) {
@@ -310,50 +329,40 @@ extension AppleMusicLyrics {
         private func emphasize(_ node: WordNode) {
             let glyphCount = node.glyphLayers.count
             guard glyphCount > 0 else { return }
-            // The spring and the return both scale with the *phrase*, not with
-            // this one word — see `LineTextLayout.Word.phraseDuration`. With
-            // per-character time tags a word is a single glyph, and word-scaled
-            // timings make it rise, freeze at the top for about 0.6 s and drop,
-            // one character at a time. Phrase-scaled timings bring the return
-            // forward to well inside the spring's settling time, so a character
-            // is still on its way up when it starts back down and its motion
-            // overlaps its neighbours'.
-            let duration = node.word.phraseDuration > 0 ? node.word.phraseDuration : node.word.duration
+            let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+            let plan = WordEmphasisPlan.make(
+                wordDuration: duration,
+                wordLength: node.word.characterRange.count,
+                renderedGlyphCount: glyphCount,
+                timingGlyphCount: node.word.emphasisGlyphCount,
+                languageIdentifier: layout?.languageIdentifier,
+                timingSource: node.word.timingSource
+            )
             let spring = SpringTimingParameters(
                 dampingRatio: LyricsSpecs.emphasisDampingRatio,
-                period: LyricsSpecs.emphasisSpringPeriod(wordDuration: duration)
+                period: plan.springPeriod
             )
-            let stagger = LyricsSpecs.glyphStagger(wordDuration: duration, glyphCount: node.word.phraseGlyphCount)
-            let scale = LyricsSpecs.emphasizingScaleRange.lowerBound
-                + emphasisFactor * (LyricsSpecs.emphasizingScaleRange.upperBound - LyricsSpecs.emphasizingScaleRange.lowerBound)
-
-            let glow = LyricsSpecs.glowOpacityRange.lowerBound
-                + Float(emphasisFactor) * (LyricsSpecs.glowOpacityRange.upperBound - LyricsSpecs.glowOpacityRange.lowerBound)
 
             for (glyphIndex, glyphLayer) in node.glyphLayers.enumerated() {
-                let target = emphasizedOrigin(ofGlyphAt: glyphIndex, in: node, scale: scale)
+                let target = emphasizedOrigin(ofGlyphAt: glyphIndex, in: node, scale: plan.scale)
                 let animator = LayerPropertyAnimator(layers: [glyphLayer], timing: spring)
                 animator.addChange {
                     Self.place(glyphLayer, atRestingOrigin: target)
-                    glyphLayer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-                    glyphLayer.shadowOpacity = glow
+                    glyphLayer.setAffineTransform(CGAffineTransform(scaleX: plan.scale, y: plan.scale))
                 }
-                // Music offsets by `index + 1`, which costs a whole stagger before
-                // its first glyph moves. It can afford that because its stagger is
-                // a word's duration split across that word's glyphs. Ours would be
-                // a phrase's stagger applied to a word holding one glyph — every
-                // character would start moving a beat after it was sung. The
-                // ripple inside a word is unchanged; only the leading offset goes.
-                animator.run(afterDelay: stagger * Double(glyphIndex))
+                animator.run(afterDelay: plan.riseDelays[glyphIndex])
             }
 
-            scheduleReturn(
-                for: node,
-                spring: spring,
-                stagger: stagger,
-                glyphCount: node.word.phraseGlyphCount,
-                duration: duration
-            )
+            if plan.glowOpacity > LyricsSpecs.glowOpacityRange.lowerBound {
+                let glowAnimator = LayerPropertyAnimator(layers: [node.wordLayer], timing: spring)
+                glowAnimator.addChange {
+                    node.wordLayer.shadowOpacity = plan.glowOpacity
+                }
+                glowAnimator.run(afterDelay: plan.riseDelays.first ?? 0)
+            }
+
+            scheduleReturns(for: node, spring: spring, plan: plan)
+            scheduleDeglow(for: node, plan: plan)
         }
 
         /// Apple Music's emphasized position for one glyph.
@@ -403,47 +412,70 @@ extension AppleMusicLyrics {
         /// two `beginTime`-delayed animations on the same key path would have the
         /// later one's backwards fill override the earlier one for its whole run,
         /// pinning the glyph at rest instead of letting it swell.
-        private func scheduleReturn(
+        private func scheduleReturns(
             for node: WordNode,
             spring: SpringTimingParameters,
-            stagger: TimeInterval,
-            glyphCount: Int,
-            duration: TimeInterval
+            plan: WordEmphasisPlan
         ) {
-            let returnDelay = LyricsSpecs.returnDelay(wordDuration: duration, glyphCount: glyphCount)
-            let work = DispatchWorkItem { [weak node] in
-                guard let node else { return }
-                for (glyphIndex, glyphLayer) in node.glyphLayers.enumerated() {
+            node.pendingGlyphReturns.forEach { $0.cancel() }
+            node.pendingGlyphReturns = node.glyphLayers.enumerated().map { glyphIndex, glyphLayer in
+                let work = DispatchWorkItem { [weak node, weak glyphLayer] in
+                    guard let node, let glyphLayer else { return }
                     let rest = node.restingOrigin(ofGlyphAt: glyphIndex)
                     let animator = LayerPropertyAnimator(layers: [glyphLayer], timing: spring)
                     animator.addChange {
                         Self.place(glyphLayer, atRestingOrigin: rest)
                         glyphLayer.setAffineTransform(.identity)
-                        glyphLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
                     }
-                    animator.run(afterDelay: stagger * Double(glyphIndex))
+                    animator.run()
                 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + plan.returnDelays[glyphIndex], execute: work)
+                return work
             }
-            node.pendingReturn?.cancel()
-            node.pendingReturn = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + returnDelay, execute: work)
+        }
+
+        private func scheduleDeglow(for node: WordNode, plan: WordEmphasisPlan) {
+            node.pendingDeglow?.cancel()
+            guard plan.glowOpacity > LyricsSpecs.glowOpacityRange.lowerBound else {
+                node.pendingDeglow = nil
+                return
+            }
+            let work = DispatchWorkItem { [weak node] in
+                guard let node else { return }
+                let deglowSpring = SpringTimingParameters(
+                    mass: WordEmphasisPlan.deglowSpringMass,
+                    stiffness: WordEmphasisPlan.deglowSpringStiffness,
+                    damping: WordEmphasisPlan.deglowSpringDamping
+                )
+                let animator = LayerPropertyAnimator(layers: [node.wordLayer], timing: deglowSpring)
+                animator.addChange {
+                    node.wordLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
+                }
+                animator.run()
+            }
+            node.pendingDeglow = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + plan.deglowDelay, execute: work)
         }
 
         /// Put every glyph back at rest immediately, cancelling anything pending.
         /// Called when the line stops being the active one, or is recycled for a
         /// different lyric.
         func resetEmphasis() {
+            precedingElapsedTime = nil
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for node in wordNodes {
-                node.pendingReturn?.cancel()
-                node.pendingReturn = nil
+                node.pendingGlyphReturns.forEach { $0.cancel() }
+                node.pendingGlyphReturns = []
+                node.pendingDeglow?.cancel()
+                node.pendingDeglow = nil
                 node.isEmphasisScheduled = false
+                LayerPropertyAnimator.removeAllAnimations(from: node.wordLayer)
+                node.wordLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
                 for (glyphIndex, glyphLayer) in node.glyphLayers.enumerated() {
                     glyphLayer.removeAllAnimations()
                     Self.place(glyphLayer, atRestingOrigin: node.restingOrigin(ofGlyphAt: glyphIndex))
                     glyphLayer.setAffineTransform(.identity)
-                    glyphLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
                 }
             }
             for (rowIndex, gradient) in progressGradientLayers.enumerated() {

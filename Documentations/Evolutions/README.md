@@ -15,4 +15,4 @@
 | [0004](0004-user-picked-lyrics-exemption.md) | 手动应用过的歌词豁免于「忽略已保存的歌词」 | Implemented |
 | [0005](0005-keyboard-shortcuts-library-swap.md) | 快捷键库从 MASShortcut 换成 KeyboardShortcuts | Draft |
 | [0006](0006-swiftui-settings.md) | 设置界面迁移到 SwiftUI | Draft |
-
+| [0007](0007-apple-music-lyrics-animation-parity.md) | 对齐 Apple Music 26.6 歌词动画 | Implemented |

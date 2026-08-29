@@ -33,61 +33,32 @@ extension AppleMusicLyrics {
         private var lastLaidOutSize: CGSize = .zero
         private var displayLink: DisplayLink?
         private var preferenceObservers: Set<AnyCancellable> = []
+        private let lineTransitionCoordinator = LineTransitionCoordinator()
+        private var pendingInteractiveTargetOriginalIndex: Int?
         /// The lyrics display time resolved once per display-link frame; drives the
         /// karaoke fill and the intro/interlude indicators together.
         private var resolvedPlaybackTime: TimeInterval = 0
 
-        // Auto-follow scroll. Apple Music animates a single spring on
-        // `scrollView.contentView.bounds` (the clip origin) so the whole line
-        // stack moves together — the lines are STATIC in the document; only the
-        // clip moves. Re-confirmed 2026-06-16 in Music.arm64e: `LayerPropertyAnimator`
-        // (`sub_100162B3C`) builds a real `CASpringAnimation` whose action
-        // (`sub_10015AF20`) sets `contentView.bounds`. There is NO per-line position
-        // cascade — that earlier reading was wrong, and the jump-clip-then-displace
-        // implementation it produced leaked the literal clip jump as the
-        // "直接运动" (teleport) the user reported.
-        //
-        // The spring is handed to Core Animation rather than stepped by hand from
-        // the display link. Music's smoothness is not in the curve — it is in how
-        // often the curve is sampled: measured at 60 Hz, one 90 pt advance arrives
-        // as 28 separate positions over 450 ms, i.e. Music moves the clip on every
-        // display frame, and the `1 3 4 5` at the start and `2 1 1 1` at the end
-        // are exactly what reads as a spring. Stepping the same curve by hand ties
-        // its smoothness to how busy the main thread is, and this panel's main
-        // thread is busy: per-frame karaoke, per-frame interlude checks, an
-        // animated gradient background. Once the animation is attached, the render
-        // server interpolates it whatever the app is doing.
-        /// Target of the in-flight clip spring, so re-centring on a target we are
-        /// already travelling to (the interlude hold does this every frame) does
-        /// not restart the animation from a standstill.
-        private var clipSpringTargetY: CGFloat?
-        private static let clipSpringAnimationKey = "AppleMusicLyrics.clipSpring"
-        // `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
-        // mass 1, stiffness 100, damping 18 → ωₙ = √(100/1) = 10, ζ = 18/(2·√100) = 0.9.
-        //
-        // Confirmed against Music 26.5.2 on screen, at full frame rate: three
-        // consecutive one-line advances each travel 80-90 pt and are delivered in
-        // 27-28 steps over 450 ms — i.e. Music moves the clip on *every* display
-        // frame — with step sizes ramping 1 3 4 5 5 6 6 and decaying 5 5 4 4 3 3
-        // 2 2 1 1 1. A 6 pt step at 60 Hz is 360 pt/s, and for ζ = 0.9 the peak
-        // speed of a spring is `travel · ωₙ · 0.395`, which puts ωₙ at 10.1.
-        //
-        // An earlier pass measured 570 pt/s and "fitted" ωₙ ≈ 15 from a 30 fps
-        // recording. That was an aliasing artifact: sampling 60 Hz motion at
-        // 30 Hz merges two frames into one and doubles the apparent per-frame
-        // step. The dumped constants were right all along — capture at the
-        // display's own rate before fitting anything to a motion curve.
-        private let scrollSpringNaturalFrequency: CGFloat = 10 // √(stiffness / mass)
-        private let scrollSpringDampingRatio: CGFloat = 0.9 // damping / (2·√(stiffness·mass))
+        /// `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
+        /// mass 1, stiffness 100, damping 18 → ωₙ = √(100/1) = 10, ζ = 18/(2·√100) = 0.9.
+        ///
+        /// Confirmed against Music 26.5.2 on screen, at full frame rate: three
+        /// consecutive one-line advances each travel 80-90 pt and are delivered in
+        /// 27-28 steps over 450 ms — i.e. Music moves the clip on *every* display
+        /// frame — with step sizes ramping 1 3 4 5 5 6 6 and decaying 5 5 4 4 3 3
+        /// 2 2 1 1 1. A 6 pt step at 60 Hz is 360 pt/s, and for ζ = 0.9 the peak
+        /// speed of a spring is `travel · ωₙ · 0.395`, which puts ωₙ at 10.1.
+        ///
+        /// An earlier pass measured 570 pt/s and "fitted" ωₙ ≈ 15 from a 30 fps
+        /// recording. That was an aliasing artifact: sampling 60 Hz motion at
+        /// 30 Hz merges two frames into one and doubles the apparent per-frame
+        /// step. The dumped constants were right all along — capture at the
+        /// display's own rate before fitting anything to a motion curve.
         private var lastHighlightedPosition: Int?
         /// A line advance further than this (e.g. a seek) snaps instantly instead of
         /// springing across the whole song.
         private let scrollJumpThreshold = 5
-        // The active (highlighted) line is centred vertically in the viewport.
-        // The document is padded by half the clip height at the top and bottom
-        // (see `relayout`) so even the first and last lines can sit at the exact
-        // centre. (Apple Music's own `selectedLinePosition` is `.top(12)`, but a
-        // centred anchor is the chosen behaviour here.)
+        // The active main-vocal baseline uses Apple Music's `.topRelative(40)` anchor.
 
         // Intro "•••" instrumental indicator. Additive: nil unless the first
         // vocal line starts after `introGapThreshold`, in which case the engine
@@ -145,10 +116,8 @@ extension AppleMusicLyrics {
             scrollView.hasHorizontalScroller = false
             scrollView.autohidesScrollers = true
             scrollView.contentView.drawsBackground = false
-            // The line-change spring is attached to this layer, so ask for it up
-            // front rather than relying on layer backing to reach the clip on its
-            // own — until it exists there is nothing to animate and every line
-            // change silently falls back to a jump.
+            // Every line and instrumental-focus transition attaches its spring to
+            // this layer, so create it before the first highlight update.
             scrollView.contentView.wantsLayer = true
             scrollView.documentView = documentView
             addSubview(scrollView)
@@ -229,10 +198,12 @@ extension AppleMusicLyrics {
         /// over `enabled` lines only) to an index that actually has a rendered
         /// view (we additionally drop empty-content lines). During an
         /// enabled-but-empty interlude line, this keeps the previous sung line
-        /// highlighted, centered, and filled instead of dropping the highlight.
+        /// highlighted, anchored, and filled instead of dropping the highlight.
         private func resolveRenderedIndex(_ index: Int?) -> Int? {
             guard let index else { return nil }
-            if lineViewByOriginalIndex[index] != nil { return index }
+            if lineViewByOriginalIndex[index] != nil {
+                return index
+            }
             return enabledOriginalIndices.last(where: { $0 <= index })
         }
 
@@ -251,6 +222,8 @@ extension AppleMusicLyrics {
 
         private func rebuildLineViews() {
             lastHighlightedPosition = nil
+            pendingInteractiveTargetOriginalIndex = nil
+            lineTransitionCoordinator.cancel(scrollView: scrollView)
             enabledLineViews.forEach { $0.removeFromSuperview() }
             enabledLineViews.removeAll()
             lineViewByOriginalIndex.removeAll()
@@ -271,6 +244,7 @@ extension AppleMusicLyrics {
                 view.alphaValue = 0.55
                 view.onTap = { [weak self] tappedLine in
                     guard let self else { return }
+                    self.pendingInteractiveTargetOriginalIndex = originalIndex
                     self.onSeek?(tappedLine.position + 0.01)
                     self.interactionState?.returnToFollowing()
                 }
@@ -333,13 +307,13 @@ extension AppleMusicLyrics {
             let clipHeight = bounds.height
             guard width > 0 else { return }
 
-            // Half a screen of padding above the first line and below the last
-            // (added at the end) so any line — first or last included — can be
-            // scrolled to the exact vertical centre of the viewport.
-            let edgePadding = clipHeight / 2
-            var cursorY = edgePadding
+            let topContentInset = enabledLineViews.first.map { lineView in
+                selectedLineTopInset(for: lineView)
+            } ?? 0
+            var cursorY = topContentInset
             if let instrumentalView {
                 let dotsHeight = instrumentalView.preferredHeight
+                cursorY = max(topContentInset, (clipHeight - dotsHeight) / 2)
                 instrumentalView.frame = NSRect(x: 0, y: cursorY, width: width, height: dotsHeight)
                 cursorY += dotsHeight
             }
@@ -357,7 +331,8 @@ extension AppleMusicLyrics {
                     cursorY += dotsHeight
                 }
             }
-            let totalHeight = cursorY + edgePadding
+            let bottomContentInset = max(0, clipHeight - topContentInset)
+            let totalHeight = cursorY + bottomContentInset
             documentView.frame = NSRect(x: 0, y: 0, width: width, height: max(totalHeight, clipHeight))
             lastLaidOutSize = bounds.size
         }
@@ -372,8 +347,6 @@ extension AppleMusicLyrics {
             if let new = originalIndex, let view = lineViewByOriginalIndex[new] {
                 view.setHighlighted(true)
             }
-            updateDistances(animated: animated)
-
             let isFollowing = interactionState?.isFollowing ?? true
             if isFollowing, let new = originalIndex {
                 if animated, window != nil {
@@ -382,24 +355,44 @@ extension AppleMusicLyrics {
                     centerLine(originalIndex: new, animated: false)
                 }
             }
+            updateDistances(animated: animated)
         }
 
-        /// Move to a newly highlighted line while following. A large jump (a seek)
-        /// snaps instantly; every normal advance springs the clip toward the new
-        /// anchor. Apple Music drives both through the same clip-bounds spring —
-        /// rapid successive line changes stay continuous because the spring
-        /// restarts from the current (presentation) position each time, so there
-        /// is no separate "rapid" branch.
+        /// Move to a newly highlighted line while following. A large noninteractive
+        /// jump snaps instantly; every normal advance springs the clip bounds to
+        /// the selected baseline anchor. Rapid successive line changes stay
+        /// continuous because each replacement spring starts at the clip's current
+        /// presentation origin.
         private func advanceFollowing(toOriginalIndex originalIndex: Int) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
             let newPosition = view.enabledPosition
+            let usesInteractiveSpring = pendingInteractiveTargetOriginalIndex == originalIndex
+            pendingInteractiveTargetOriginalIndex = nil
             let isJump = lastHighlightedPosition.map { abs(newPosition - $0) > scrollJumpThreshold } ?? true
             lastHighlightedPosition = newPosition
-            centerLine(originalIndex: originalIndex, animated: !isJump)
+            centerLine(
+                originalIndex: originalIndex,
+                animated: usesInteractiveSpring || !isJump,
+                usesInteractiveSpring: usesInteractiveSpring
+            )
         }
 
         private func updateDistances(animated: Bool) {
             let highlightedPosition = highlightedOriginalIndex.flatMap { lineViewByOriginalIndex[$0]?.enabledPosition }
+            let visibleBounds = scrollView.documentVisibleRect.insetBy(
+                dx: 0,
+                dy: -scrollView.documentVisibleRect.height * 0.5
+            )
+            var visibleLinePositions = Set(enabledLineViews.compactMap { lineView in
+                lineView.frame.intersects(visibleBounds) ? lineView.enabledPosition : nil
+            })
+            if let highlightedPosition {
+                visibleLinePositions.insert(highlightedPosition)
+            }
+            let blurPlan = LineBlurPlan.make(
+                visibleLinePositions: visibleLinePositions,
+                selectedLinePosition: highlightedPosition
+            )
             for view in enabledLineViews {
                 let isSelected = highlightedPosition.map { view.enabledPosition == $0 } ?? false
                 // Every non-selected line sits at one flat opacity no matter how
@@ -417,109 +410,94 @@ extension AppleMusicLyrics {
                 // `deselectedTransform` is the identity (no whole-line scale) — kept
                 // for the active line staying at 1.0.
                 view.setLineSelected(isSelected, animated: animated)
-                // Music blurs every line that is not the selected one, at one
-                // fixed radius regardless of distance. It has no "nothing is
-                // selected" state to speak of, so the guard is ours: blurring the
-                // whole panel during an intro reads as broken rather than as
-                // depth.
-                view.setLineBlurred(highlightedPosition != nil && !isSelected, animated: animated)
+                // Music keeps an explicit contextual set rather than treating
+                // every non-selected row as blurred. Rows inside the current
+                // rendering context use one fixed radius; rows outside it return
+                // to zero so they do not retain stale filter state.
+                let targetBlurRadius = blurPlan.blurredLinePositions.contains(view.enabledPosition)
+                    ? blurPlan.radius
+                    : 0
+                view.setLineBlurRadius(targetBlurRadius, animated: animated)
             }
         }
 
         // MARK: Scrolling
 
-        private func centerLine(originalIndex: Int, animated: Bool) {
+        private func centerLine(
+            originalIndex: Int,
+            animated: Bool,
+            usesInteractiveSpring: Bool = false
+        ) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
-            anchorClip(toCenterY: view.frame.midY, animated: animated)
+            let targetClipVerticalOrigin = clampedClipVerticalOrigin(for: view)
+            let timing = usesInteractiveSpring
+                ? SpringTimingParameters(
+                    mass: LineTransitionPlan.interactiveSpringMass,
+                    stiffness: LineTransitionPlan.interactiveSpringStiffness,
+                    damping: LineTransitionPlan.interactiveSpringDamping
+                )
+                : SpringTimingParameters(
+                    mass: LineTransitionPlan.normalSpringMass,
+                    stiffness: LineTransitionPlan.normalSpringStiffness,
+                    damping: LineTransitionPlan.normalSpringDamping
+                )
+            lineTransitionCoordinator.transition(
+                scrollView: scrollView,
+                targetClipVerticalOrigin: targetClipVerticalOrigin,
+                timing: timing,
+                animated: animated && window != nil
+            )
         }
 
         private func centerOnInstrumentalDots(animated: Bool) {
             guard let instrumentalView else { return }
-            anchorClip(toCenterY: instrumentalView.frame.midY, animated: animated)
+            anchorClip(toCenterVerticalPosition: instrumentalView.frame.midY, animated: animated)
         }
 
-        /// Scroll so `centerY` (a line or indicator's vertical CENTRE) sits at the
-        /// vertical centre of the viewport — the active line is centred.
-        private func anchorClip(toCenterY centerY: CGFloat, animated: Bool) {
-            let targetY = clampedClipY(forCenterY: centerY)
-
-            // Off-window there is no render server driving anything, so jump.
-            if animated, window != nil {
-                guard clipSpringTargetY.map({ abs($0 - targetY) > 0.5 }) ?? true else { return }
-                clipSpringTargetY = targetY
-                springClip(to: targetY)
-            } else {
-                cancelClipSpring()
-                setClipOrigin(targetY)
-            }
-        }
-
-        private func setClipOrigin(_ originY: CGFloat) {
-            let clipView = scrollView.contentView
-            clipView.setBoundsOrigin(CGPoint(x: clipView.bounds.origin.x, y: originY))
-            scrollView.reflectScrolledClipView(clipView)
-        }
-
-        private func clampedClipY(forCenterY centerY: CGFloat) -> CGFloat {
-            let visibleHeight = scrollView.contentView.bounds.height
-            let maxOriginY = max(0, documentView.frame.height - visibleHeight)
-            return min(max(0, centerY - visibleHeight / 2), maxOriginY)
-        }
-
-        // MARK: Auto-follow scroll spring
-
-        /// Travel to `targetY` on Apple Music's line-change spring, with Core
-        /// Animation doing the interpolating.
-        ///
-        /// The clip's bounds belong to AppKit — it re-projects them onto the layer
-        /// from the view's own ivars on any geometry pass, with no guard flag to
-        /// opt out of — so the model value is written first and stays authoritative
-        /// for hit testing, `documentVisibleRect` and the next target. The explicit
-        /// animation then rides on top of that model value purely as a visual, the
-        /// same split Music's `LayerPropertyAnimator` (`sub_100162B3C`) uses when
-        /// it springs `contentView.bounds` (`sub_10015AF20`).
-        private func springClip(to targetY: CGFloat) {
-            guard let clipLayer = scrollView.contentView.layer else {
-                setClipOrigin(targetY)
-                return
-            }
-            // Where the eye last saw the content, not where the model says it is:
-            // a line change that interrupts one still in flight has to continue
-            // from the visible position or it jumps back to pick up the new curve.
-            let visibleY = (clipLayer.presentation() ?? clipLayer).bounds.origin.y
-            setClipOrigin(targetY)
-            guard abs(visibleY - targetY) > 0.5 else {
-                clipLayer.removeAnimation(forKey: Self.clipSpringAnimationKey)
-                return
-            }
-
+        /// Scroll so an instrumental indicator's vertical centre sits at the
+        /// vertical centre of the viewport.
+        private func anchorClip(toCenterVerticalPosition centerVerticalPosition: CGFloat, animated: Bool) {
+            let targetVerticalOrigin = clampedClipVerticalOrigin(forCenterVerticalPosition: centerVerticalPosition)
             let timing = SpringTimingParameters(
-                dampingRatio: scrollSpringDampingRatio,
-                period: 2 * .pi / TimeInterval(scrollSpringNaturalFrequency)
+                mass: LineTransitionPlan.normalSpringMass,
+                stiffness: LineTransitionPlan.normalSpringStiffness,
+                damping: LineTransitionPlan.normalSpringDamping
             )
-            let animation = timing.makeAnimation(keyPath: "bounds.origin.y")
-            animation.fromValue = visibleY
-            animation.toValue = targetY
-            animation.isRemovedOnCompletion = true
-            animation.preferredFrameRateRange = LyricsSpecs.preferredFrameRateRange
-            clipLayer.add(animation, forKey: Self.clipSpringAnimationKey)
+            lineTransitionCoordinator.transition(
+                scrollView: scrollView,
+                targetClipVerticalOrigin: targetVerticalOrigin,
+                timing: timing,
+                animated: animated && window != nil
+            )
         }
 
-        /// Drop an in-flight clip spring, leaving the content where it currently
-        /// looks like it is rather than where the spring was headed.
-        private func cancelClipSpring() {
-            clipSpringTargetY = nil
-            guard let clipLayer = scrollView.contentView.layer,
-                  clipLayer.animation(forKey: Self.clipSpringAnimationKey) != nil else { return }
-            let visibleY = (clipLayer.presentation() ?? clipLayer).bounds.origin.y
-            clipLayer.removeAnimation(forKey: Self.clipSpringAnimationKey)
-            setClipOrigin(visibleY)
+        private func clampedClipVerticalOrigin(forCenterVerticalPosition centerVerticalPosition: CGFloat) -> CGFloat {
+            let visibleHeight = scrollView.contentView.bounds.height
+            let maximumVerticalOrigin = max(0, documentView.frame.height - visibleHeight)
+            return min(max(0, centerVerticalPosition - visibleHeight / 2), maximumVerticalOrigin)
+        }
+
+        private func clampedClipVerticalOrigin(for lineView: SyncedLyricsLineView) -> CGFloat {
+            let visibleHeight = scrollView.contentView.bounds.height
+            let maximumVerticalOrigin = max(0, documentView.frame.height - visibleHeight)
+            let topInset = selectedLineTopInset(for: lineView)
+            return min(
+                max(0, lineView.frame.minY - topInset),
+                maximumVerticalOrigin
+            )
+        }
+
+        private func selectedLineTopInset(for lineView: SyncedLyricsLineView) -> CGFloat {
+            LineTransitionPlan.selectedLineTopInset(
+                visibleHeight: scrollView.contentView.bounds.height,
+                firstBaselineOffset: lineView.mainTextFirstBaselineOffset
+            )
         }
 
         @objc private func userWillScroll() {
             // The user took over — abandon the in-flight auto-scroll spring so it
             // does not keep moving content under the drag.
-            cancelClipSpring()
+            lineTransitionCoordinator.cancel(scrollView: scrollView)
             interactionState?.userDidScroll()
         }
 
@@ -547,9 +525,9 @@ extension AppleMusicLyrics {
             resolvedPlaybackTime = selectedPlayer.playbackState.lyricsDisplayTime(
                 trackDuration: selectedPlayer.currentTrack?.duration
             )
-            // Nothing here touches the scroll: the clip travels on a real
-            // `CASpringAnimation`, so it keeps moving at the display's own rate
-            // even when this callback is late.
+            // Nothing here advances a transition: Core Animation owns the clip
+            // spring, so it keeps moving at the display's own rate even when this
+            // callback is late.
             updateIntroDotsIfNeeded()
             updateInterludesIfNeeded()
 
@@ -559,7 +537,11 @@ extension AppleMusicLyrics {
                   let view = lineViewByOriginalIndex[highlighted] else { return }
             let line = lyrics.lines[highlighted]
             let elapsed = resolvedPlaybackTime + lyrics.adjustedTimeDelay - line.position
-            view.updateKaraoke(elapsedTime: elapsed, lineDuration: lineDuration(forOriginalIndex: highlighted), mode: karaokeMode)
+            view.updateKaraoke(
+                elapsedTime: elapsed,
+                lineDuration: lineDuration(forOriginalIndex: highlighted),
+                mode: karaokeMode
+            )
         }
 
         private func updateIntroDotsIfNeeded() {
@@ -591,7 +573,7 @@ extension AppleMusicLyrics {
             // During an interlude, keep the dots centered (the previous line
             // stays highlighted but the focus is the upcoming-break indicator).
             if let activeSegment, interactionState?.isFollowing ?? true {
-                anchorClip(toCenterY: activeSegment.view.frame.midY, animated: true)
+                anchorClip(toCenterVerticalPosition: activeSegment.view.frame.midY, animated: true)
             }
         }
 
@@ -636,6 +618,7 @@ extension AppleMusicLyrics {
             init(lyrics: Lyrics) {
                 var enabledCount = 0
                 var hasher = Hasher()
+                hasher.combine(lyrics.idTags[.init("lang")] ?? "")
                 for line in lyrics.lines where line.enabled && !line.content.isEmpty {
                     enabledCount += 1
                     hasher.combine(line.content)
@@ -646,6 +629,7 @@ extension AppleMusicLyrics {
                     let timetag = line.attachments.timetag
                     hasher.combine(timetag?.tags.count ?? -1)
                     hasher.combine(timetag?.duration ?? -1)
+                    hasher.combine(line.attachments.synchronizedTextTiming?.description ?? "")
                     hasher.combine(line.attachments.translation() ?? "")
                 }
                 self.count = enabledCount

@@ -6,11 +6,11 @@ extension AppleMusicLyrics {
     /// A lyric line laid out once by Core Text and sliced into the shape Apple
     /// Music animates: a list of words, each owning its glyphs.
     ///
-    /// Music's model is `Line → Word → Syllable → Glyph`; we collapse the syllable
-    /// level, because LyricsKit's inline time tags give per-word boundaries and
-    /// nothing finer. Everything is in the line content layer's coordinate space,
-    /// which is y-down (the layer sets `isGeometryFlipped`) so it lines up with the
-    /// flipped view that hosts it.
+    /// Music's model is `Line → Word → Syllable → Glyph`. Apple Music TTML keeps
+    /// that hierarchy; sources that only carry inline starts use the established
+    /// phrase fallback. Everything is in the line content layer's coordinate
+    /// space, which is y-down (the layer sets `isGeometryFlipped`) so it lines up
+    /// with the flipped view that hosts it.
     struct LineTextLayout {
         /// One glyph, positioned inside its word.
         struct Glyph {
@@ -25,32 +25,36 @@ extension AppleMusicLyrics {
 
         /// One word: the unit Music emphasizes, and the unit our time tags give us.
         struct Word {
+            struct Syllable {
+                let characterRange: Range<Int>
+                let timeRange: Range<TimeInterval>
+                /// Indices into the owning word's `glyphs` array.
+                let glyphIndices: [Int]
+            }
+
             let text: String
+            let characterRange: Range<Int>
             /// When this word is sung, in seconds from the start of the line.
             /// `nil` when the line carries no inline timing at all.
             let timeRange: Range<TimeInterval>?
+            let syllables: [Syllable]
+            let timingSource: WordEmphasisPlan.TimingSource
             let glyphs: [Glyph]
             /// Frame in the line content layer's coordinate space.
             let frame: CGRect
             let visualLineIndex: Int
 
-            /// Span of the phrase this word belongs to, and how many glyphs that
-            /// phrase holds in total.
+            /// Duration and glyph count used by the emphasis scheduler.
             ///
-            /// Music's emphasis timings are written for words that carry several
-            /// glyphs: the spring's period is the *word's* duration while each
-            /// glyph starts travelling back after only `2 · duration / glyphCount`,
-            /// so a glyph never reaches the top and its motion overlaps its
-            /// neighbours' — that overlap is the travelling swell.
+            /// Structured timing supplies the exact word duration and glyph count.
+            /// The legacy inline-start path reconstructs the neighbouring phrase
+            /// those timings used to describe, preserving its established motion.
             ///
-            /// Our inline time tags are per character, so left alone every word
-            /// holds exactly one glyph, both of those terms degenerate (the return
-            /// lands long after the spring has settled) and each character rises,
-            /// freezes for about 0.6 s and drops on its own. Grouping neighbouring
-            /// words back into a phrase puts Music's own formulas back in the range
-            /// they were written for.
-            var phraseDuration: TimeInterval = 0
-            var phraseGlyphCount: Int = 1
+            /// Music's formulas assume multiple glyphs can overlap. Treating every
+            /// legacy character start as a one-glyph word instead makes each
+            /// character rise, park, and fall on its own.
+            var emphasisDuration: TimeInterval = 0
+            var emphasisGlyphCount: Int = 1
 
             var duration: TimeInterval {
                 guard let timeRange else { return 0 }
@@ -64,6 +68,7 @@ extension AppleMusicLyrics {
         /// Left edge of each visual row's text, parallel to `visualLineWidths`.
         let visualLineLeftEdges: [CGFloat]
         let contentSize: CGSize
+        let languageIdentifier: String?
 
         var totalTextWidth: CGFloat {
             visualLineWidths.reduce(0, +)
@@ -82,6 +87,8 @@ extension AppleMusicLyrics.LineTextLayout {
         attributed: NSAttributedString,
         content: String,
         wordTimings: [AppleMusicLyrics.WordTimingEntry],
+        synchronizedTextTiming: LyricsLine.Attachments.SynchronizedTextTiming? = nil,
+        languageIdentifier: String? = nil,
         lineDuration: TimeInterval,
         textWidth: CGFloat
     ) -> AppleMusicLyrics.LineTextLayout? {
@@ -102,7 +109,12 @@ extension AppleMusicLyrics.LineTextLayout {
         _ = CTLineGetTypographicBounds(coreTextLines[0], &firstAscent, nil, nil)
         let blockTopInPathSpace = lineOrigins[0].y + firstAscent
 
-        let wordBoundaries = utf16WordBoundaries(content: content, wordTimings: wordTimings, lineDuration: lineDuration)
+        let wordBoundaries = unicodeCodeUnitWordBoundaries(
+            content: content,
+            wordTimings: wordTimings,
+            synchronizedTextTiming: synchronizedTextTiming,
+            lineDuration: lineDuration
+        )
 
         var words: [Word] = []
         var visualLineWidths: [CGFloat] = []
@@ -134,32 +146,31 @@ extension AppleMusicLyrics.LineTextLayout {
             ))
         }
 
-        assignPhrases(to: &words)
+        assignEmphasisTiming(to: &words)
 
         return AppleMusicLyrics.LineTextLayout(
             words: words,
             visualLineWidths: visualLineWidths,
             visualLineLeftEdges: visualLineLeftEdges,
-            contentSize: CGSize(width: textWidth, height: ceil(contentHeight))
+            contentSize: CGSize(width: textWidth, height: ceil(contentHeight)),
+            languageIdentifier: languageIdentifier
         )
     }
 
-    /// Gather neighbouring words into phrases, and tag each word with its
-    /// phrase's span — see `Word.phraseDuration` for why the emphasis timings
-    /// need this.
+    /// Preserve exact word timing when available; otherwise gather neighbouring
+    /// inline-start units into the phrase used by the legacy animation path.
     ///
     /// A phrase ends at whitespace (the only word boundary the text itself
     /// gives us), at a wrap, at an untimed word, and once it has grown longer
     /// than the spring period Music is willing to use — past that the period
     /// stops growing with the phrase, so letting the phrase keep growing would
     /// only stretch the tail.
-    private static func assignPhrases(to words: inout [Word]) {
-        var phraseStart = 0
+    private static func assignEmphasisTiming(to words: inout [Word]) {
+        var phraseStart: Int?
 
         func closePhrase(endingBefore end: Int) {
-            defer { phraseStart = end }
-            guard phraseStart < end else { return }
-            let members = words[phraseStart ..< end]
+            guard let startingIndex = phraseStart, startingIndex < end else { return }
+            let members = words[startingIndex ..< end]
             let glyphCount = members.reduce(0) { $0 + $1.glyphs.count }
             let span: TimeInterval
             if let start = members.first?.timeRange?.lowerBound,
@@ -168,15 +179,34 @@ extension AppleMusicLyrics.LineTextLayout {
             } else {
                 span = 0
             }
-            for index in phraseStart ..< end {
-                words[index].phraseDuration = span
-                words[index].phraseGlyphCount = max(1, glyphCount)
+            for index in startingIndex ..< end {
+                words[index].emphasisDuration = span
+                words[index].emphasisGlyphCount = max(1, glyphCount)
             }
+            phraseStart = nil
         }
 
         for index in words.indices {
             let word = words[index]
-            let spanSoFar = words[phraseStart].timeRange.map { start in
+            if word.timingSource == .synchronized {
+                closePhrase(endingBefore: index)
+                let matchingWordIndices = words.indices.filter { candidateIndex in
+                    words[candidateIndex].timingSource == .synchronized
+                        && words[candidateIndex].characterRange == word.characterRange
+                        && words[candidateIndex].timeRange == word.timeRange
+                }
+                let glyphCount = matchingWordIndices.reduce(0) { count, candidateIndex in
+                    count + words[candidateIndex].glyphs.count
+                }
+                words[index].emphasisDuration = word.duration
+                words[index].emphasisGlyphCount = max(1, glyphCount)
+                continue
+            }
+            if phraseStart == nil {
+                phraseStart = index
+            }
+            guard let startingIndex = phraseStart else { continue }
+            let spanSoFar = words[startingIndex].timeRange.map { start in
                 (word.timeRange?.upperBound ?? start.upperBound) - start.lowerBound
             } ?? 0
             let isLast = index + 1 == words.count
@@ -194,30 +224,90 @@ extension AppleMusicLyrics.LineTextLayout {
     /// One word boundary, already converted to UTF-16 so it can be compared
     /// against Core Text's string indices directly.
     private struct WordBoundary {
-        let utf16Range: Range<Int>
+        struct SyllableBoundary {
+            let unicodeCodeUnitRange: Range<Int>
+            let characterRange: Range<Int>
+            let timeRange: Range<TimeInterval>
+        }
+
+        let unicodeCodeUnitRange: Range<Int>
         let characterRange: Range<Int>
         let timeRange: Range<TimeInterval>?
+        let syllables: [SyllableBoundary]
+        let timingSource: AppleMusicLyrics.WordEmphasisPlan.TimingSource
     }
 
-    private static func utf16WordBoundaries(
+    private static func unicodeCodeUnitWordBoundaries(
         content: String,
         wordTimings: [AppleMusicLyrics.WordTimingEntry],
+        synchronizedTextTiming: LyricsLine.Attachments.SynchronizedTextTiming?,
         lineDuration: TimeInterval
     ) -> [WordBoundary] {
-        var characterToUTF16: [Int] = []
-        characterToUTF16.reserveCapacity(content.count + 1)
-        var utf16Offset = 0
+        var characterToUnicodeCodeUnitOffset: [Int] = []
+        characterToUnicodeCodeUnitOffset.reserveCapacity(content.count + 1)
+        var unicodeCodeUnitOffset = 0
         for character in content {
-            characterToUTF16.append(utf16Offset)
-            utf16Offset += character.utf16.count
+            characterToUnicodeCodeUnitOffset.append(unicodeCodeUnitOffset)
+            unicodeCodeUnitOffset += character.utf16.count
         }
-        characterToUTF16.append(utf16Offset)
+        characterToUnicodeCodeUnitOffset.append(unicodeCodeUnitOffset)
 
         let characterCount = content.count
+        if let synchronizedTextTiming,
+           synchronizedTextTiming.isValid(forCharacterCount: characterCount) {
+            var synchronizedBoundaries: [WordBoundary] = []
+            var nextUnassignedCharacterIndex = 0
+            for word in synchronizedTextTiming.words {
+                if nextUnassignedCharacterIndex < word.characterRange.lowerBound {
+                    synchronizedBoundaries.append(WordBoundary(
+                        unicodeCodeUnitRange: characterToUnicodeCodeUnitOffset[nextUnassignedCharacterIndex]
+                            ..< characterToUnicodeCodeUnitOffset[word.characterRange.lowerBound],
+                        characterRange: nextUnassignedCharacterIndex ..< word.characterRange.lowerBound,
+                        timeRange: nil,
+                        syllables: [],
+                        timingSource: .inferred
+                    ))
+                }
+                synchronizedBoundaries.append(WordBoundary(
+                    unicodeCodeUnitRange: characterToUnicodeCodeUnitOffset[word.characterRange.lowerBound]
+                        ..< characterToUnicodeCodeUnitOffset[word.characterRange.upperBound],
+                    characterRange: word.characterRange,
+                    timeRange: word.timeRange,
+                    syllables: word.syllables.map { syllable in
+                        WordBoundary.SyllableBoundary(
+                            unicodeCodeUnitRange: characterToUnicodeCodeUnitOffset[syllable.characterRange.lowerBound]
+                                ..< characterToUnicodeCodeUnitOffset[syllable.characterRange.upperBound],
+                            characterRange: syllable.characterRange,
+                            timeRange: syllable.timeRange
+                        )
+                    },
+                    timingSource: .synchronized
+                ))
+                nextUnassignedCharacterIndex = word.characterRange.upperBound
+            }
+            if nextUnassignedCharacterIndex < characterCount {
+                synchronizedBoundaries.append(WordBoundary(
+                    unicodeCodeUnitRange: characterToUnicodeCodeUnitOffset[nextUnassignedCharacterIndex]
+                        ..< characterToUnicodeCodeUnitOffset[characterCount],
+                    characterRange: nextUnassignedCharacterIndex ..< characterCount,
+                    timeRange: nil,
+                    syllables: [],
+                    timingSource: .inferred
+                ))
+            }
+            return synchronizedBoundaries
+        }
+
         guard !wordTimings.isEmpty else {
             // No inline timing: the whole line behaves as a single word with no
             // emphasis schedule of its own.
-            return [WordBoundary(utf16Range: 0 ..< utf16Offset, characterRange: 0 ..< characterCount, timeRange: nil)]
+            return [WordBoundary(
+                unicodeCodeUnitRange: 0 ..< unicodeCodeUnitOffset,
+                characterRange: 0 ..< characterCount,
+                timeRange: nil,
+                syllables: [],
+                timingSource: .inferred
+            )]
         }
 
         var boundaries: [WordBoundary] = []
@@ -229,22 +319,21 @@ extension AppleMusicLyrics.LineTextLayout {
             guard startCharacter < endCharacter else { continue }
             let endTime = index + 1 < wordTimings.count ? wordTimings[index + 1].timeOffset : lineDuration
             boundaries.append(WordBoundary(
-                utf16Range: characterToUTF16[startCharacter] ..< characterToUTF16[endCharacter],
+                unicodeCodeUnitRange: characterToUnicodeCodeUnitOffset[startCharacter]
+                    ..< characterToUnicodeCodeUnitOffset[endCharacter],
                 characterRange: startCharacter ..< endCharacter,
-                timeRange: timing.timeOffset ..< max(timing.timeOffset, endTime)
+                timeRange: timing.timeOffset ..< max(timing.timeOffset, endTime),
+                syllables: [],
+                timingSource: .inferred
             ))
         }
         return boundaries
     }
 
-    /// Slice one visual row's glyphs into words.
-    ///
-    /// A word that straddles a wrap becomes two entries sharing the same time
-    /// range: Core Text can break anywhere in CJK text, and a single layer cannot
-    /// span two rows.
     /// One glyph in row order, tagged with the word it belongs to.
     private struct TaggedGlyph {
         let boundaryIndex: Int
+        let stringIndex: Int
         let run: CTRun
         let glyphRange: CFRange
         /// Frame in the visual row's coordinate space, before the word it lands
@@ -283,9 +372,23 @@ extension AppleMusicLyrics.LineTextLayout {
             guard !currentGlyphs.isEmpty else { return }
             let wordFrame = currentGlyphs.dropFirst().reduce(currentGlyphs[0].frame) { $0.union($1.frame) }
             let boundary = boundaries.indices.contains(currentBoundary) ? boundaries[currentBoundary] : nil
+            let syllables = boundary?.syllables.compactMap { syllableBoundary -> Word.Syllable? in
+                let glyphIndices = currentGlyphs.indices.filter { glyphIndex in
+                    syllableBoundary.unicodeCodeUnitRange.contains(currentGlyphs[glyphIndex].stringIndex)
+                }
+                guard !glyphIndices.isEmpty else { return nil }
+                return Word.Syllable(
+                    characterRange: syllableBoundary.characterRange,
+                    timeRange: syllableBoundary.timeRange,
+                    glyphIndices: glyphIndices
+                )
+            } ?? []
             result.append(Word(
                 text: boundary.map { text(of: $0, in: content) } ?? "",
+                characterRange: boundary?.characterRange ?? 0 ..< 0,
                 timeRange: boundary?.timeRange,
+                syllables: syllables,
+                timingSource: boundary?.timingSource ?? .inferred,
                 glyphs: currentGlyphs.map { glyph in
                     Glyph(
                         run: glyph.run,
@@ -317,7 +420,11 @@ extension AppleMusicLyrics.LineTextLayout {
         return result
     }
 
-    private static func taggedGlyphs(in coreTextLine: CTLine, row: RowMetrics, boundaries: [WordBoundary]) -> [TaggedGlyph] {
+    private static func taggedGlyphs(
+        in coreTextLine: CTLine,
+        row: RowMetrics,
+        boundaries: [WordBoundary]
+    ) -> [TaggedGlyph] {
         guard let runs = CTLineGetGlyphRuns(coreTextLine) as? [CTRun] else { return [] }
         var tagged: [TaggedGlyph] = []
         for run in runs {
@@ -331,8 +438,10 @@ extension AppleMusicLyrics.LineTextLayout {
             CTRunGetStringIndices(run, CFRange(location: 0, length: 0), &stringIndices)
 
             for glyphIndex in 0 ..< glyphCount {
+                let stringIndex = stringIndices[glyphIndex]
                 tagged.append(TaggedGlyph(
-                    boundaryIndex: boundaries.firstIndex { $0.utf16Range.contains(stringIndices[glyphIndex]) } ?? 0,
+                    boundaryIndex: boundaryIndex(containing: stringIndex, boundaries: boundaries),
+                    stringIndex: stringIndex,
                     run: run,
                     glyphRange: CFRange(location: glyphIndex, length: 1),
                     frame: CGRect(
@@ -345,6 +454,13 @@ extension AppleMusicLyrics.LineTextLayout {
             }
         }
         return tagged
+    }
+
+    private static func boundaryIndex(containing stringIndex: Int, boundaries: [WordBoundary]) -> Int {
+        if let containingIndex = boundaries.firstIndex(where: { $0.unicodeCodeUnitRange.contains(stringIndex) }) {
+            return containingIndex
+        }
+        return boundaries.lastIndex(where: { $0.unicodeCodeUnitRange.lowerBound <= stringIndex }) ?? 0
     }
 
     private static func text(of boundary: WordBoundary, in content: String) -> String {

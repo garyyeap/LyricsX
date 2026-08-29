@@ -1,0 +1,206 @@
+# Apple Music 26.6 歌词动画
+
+> 对应提案：[对齐 Apple Music 26.6 歌词动画](../Evolutions/0007-apple-music-lyrics-animation-parity.md)
+>
+> 面向维护者。这里记录最终数据链、动画状态所有权和降级边界；旧的探索文档保留为历史记录，
+> 不再作为 26.6 行为的实现依据。
+
+## 一句话
+
+主歌词现在走两条明确的数据路径：Apple Music TTML 保留真实的 word/syllable range 与结束时间，
+按 Apple Music 26.6 的 factor、stagger、clip bounds spring 和 contextual blur 执行动画；没有结构化数据的
+其他歌词继续走原来的 phrase 推断，不伪造不存在的层级。
+
+## 最终数据链
+
+```text
+Apple Music TTML
+  → LyricsKit Lyrics+TTML
+  → LyricsLine.Attachments.SynchronizedTextTiming
+  → LRCX [synchronized-timing] + 既有 [tt]
+  → AppleMusicLyricsPanel LineTextLayout
+  → WordEmphasisPlan / LineTransitionPlan / LineBlurPlan
+  → CALayer 显式动画
+```
+
+### 结构化 timing 为什么必须在 LyricsKit 保存
+
+TTML 的 `<span>` 同时给出了文本范围、`begin`、`end` 和嵌套关系。旧 parser 只把每个 span 的
+开始位置写进 `[tt]`，因此进入面板之前就已经丢掉了结束时间以及 word/syllable 层级；面板再复杂也
+无法可靠还原。
+
+`LyricsLine.Attachments.SynchronizedTextTiming` 现在保存：
+
+- word 的 Swift `Character` range 与相对行首的 time range；
+- word 下每个 syllable 的 character range 与 time range；
+- 可选的整行 duration。
+
+只有一层 timed span 时，它成为一个 word，并生成一个同 range、同 time range 的 syllable；外层
+word 包含内层 timed span 时，内层 span 原样成为 syllable。解析仍同时生成既有 `[tt]`，旧消费者
+因此还能得到逐字开始时间。
+
+### LRCX 的附加格式
+
+新 attachment 的 tag 是 `[synchronized-timing]`，payload 为：
+
+```text
+1:<Base64(JSON)>
+```
+
+版本号在 Base64 之外，JSON 内的时间全部是整数毫秒，range 使用半开区间的起止 character index。
+这是 additive 格式：没有修改 `[tt]` 的任何字节或语义。
+
+载入时会整体校验：
+
+- word range 有序、非空且不越过歌词文本；
+- syllable 位于所属 word 内；
+- character range 与 time range 都不会反向；
+- 时间有限、非负；
+- payload version、Base64 或 JSON 损坏时直接拒绝。
+
+任何一项失败都只丢弃 `SynchronizedTextTiming`，继续使用同一行的 `[tt]`；不会保留半份结构，也不会
+让整首歌词解析失败。反向 range 在构造 Swift `Range` 之前就会被拒绝，损坏文件不能借此触发崩溃。
+
+## 行内动画
+
+### 精确路径与 fallback
+
+`LineTextLayout` 先把 Swift `Character` index 转成 Core Text 使用的 UTF-16 code-unit index，
+再把 glyph 放回对应 word 与 syllable。结构化 range 之间允许空白；空白形成不带 timing 的边界，
+不会被算进相邻 word 的 duration 或 glyph count。
+
+存在有效 `SynchronizedTextTiming` 时，emphasis 使用真实 word duration、word length 和 glyph count。
+缺少它时，既有 `InlineTimeTag` 仍会把相邻字符归回 phrase；这条 fallback 保留原有的满强度 factor
+与首 glyph 零延迟，避免非 Apple Music 来源突然改变观感。
+
+### factor 与语言能力
+
+结构化路径按歌词的 `lang` id tag 取基础语言代码。`ar`、`he`、`zh`、`ja`（含地区后缀）保留 lift，
+但没有额外 scale 和 glow。其他或未知语言只有同时满足下面两项才有 factor：
+
+```text
+wordDuration > 1 second
+wordLength <= 7 characters
+factor = min(wordDuration, 2) - 1
+```
+
+factor 为 0 不代表 glyph 静止：lift 仍然执行，只是 scale 保持 1、glow 保持 0。
+
+### 调度公式与 layer 层级
+
+`WordEmphasisPlan` 固定 26.6 恢复出的公式：
+
+```text
+scale        = 1 + factor × 0.14
+glowOpacity  = factor × 0.4
+springPeriod = min(wordDuration, 3)
+glyphStagger = min(wordDuration / glyphCount × 0.4, 0.4)
+riseDelay    = glyphStagger × (glyphIndex + 1)
+returnDelay  = riseDelay + 2 × wordDuration / glyphCount
+```
+
+glow 在 rasterized `WordLayer` 上，`shadowRadius = 5`、`shadowOffset = 0`；glyph layer 只负责 position
+与 affine transform，不再各自投影。word duration 到达后，glow 由独立的
+`mass 1 / stiffness 14 / damping 7` spring 回到 0，和 glyph 的几何回落不是同一批动画。
+
+seek、换行、歌词替换或 view reuse 都会取消尚未执行的 glyph return 与 deglow work item，删除显式
+动画，并一次性恢复模型状态。新的动画永远从 presentation layer 的可见状态接续。
+
+## 行间动画
+
+选中主歌词使用 `.topRelative(40)`。Apple Music 对 text-only line frame 的计算是：
+
+```text
+topInset = visibleHeight × 0.40 - CTFontGetAscent(font)
+targetY  = max(lineFrame.minY - topInset, 0)
+```
+
+本项目的 row frame 在文字前还有 28 点内边距，因此 `LineTransitionPlan` 从 40% 中减去完整的
+`mainTextFirstBaselineOffset`。这样定位的是第一条文字 baseline，而不是 row 外框顶部；窗口高度变化时
+会重新计算，不能退回固定点数。
+
+`LineTransitionCoordinator` 只给 `NSClipView` backing layer 安装一条 `bounds.origin.y` spring：
+
+1. 从 clip presentation layer 读取当前可见 origin。
+2. 在关闭 implicit actions 的 transaction 中提交最终 `NSClipView.bounds` 模型值。
+3. spring 从可见 origin 运行到模型终点；中途换行会从新的 presentation origin 接续。
+4. 同一目标仍在运行时不重启动画；离屏、初始化和非交互大跨度 seek 直接落到模型终点。
+
+常规换行为 `mass 1 / stiffness 100 / damping 18`。点击歌词跳转使用
+`mass 2 / stiffness 260 / damping 50`，即使跨度较大也执行。
+
+Apple Music 的 update result 可以同时包含 clip bounds 与 row frame update，但后者只对应模型 frame
+真实变化的行。当前 main-vocal selection 不改变任何 row frame，因此正常切行不能给所有可见行再添加
+一份完整 clip displacement。旧实现正是这样制造出大量 `position.y` spring，并在切行瞬间逐行
+`layoutSubtreeIfNeeded()`，带 blur、mask 和 rasterized word 的 layer tree 会一起重新合成，造成录屏中的卡顿。
+
+instrumental dots 仍然居中，但复用同一个 coordinator 和常规 clip spring，不再维护第二套动画状态。
+
+## 多行文本坐标
+
+`LineTextLayout` 已把 Core Text 的 y-up baseline 转换成 y-down frame。`SyncedLyricsLineContentLayer`
+也必须固定为 `isGeometryFlipped = true`。此前根据 AppKit backing layer 的状态动态取反，使 content layer
+在真实 flipped row view 中变成 unflipped；一条歌词换成两行时，第二个视觉行因此被画到第一个视觉行上方。
+
+回归测试使用用户截图中的版权句“（未经著作权人许可，不得翻唱翻录或使用。）”，同时固定两层契约：
+layout 中 visual row 0 的 y 小于 visual row 1，承载这些 frame 的 content layer 保持 y-down。
+
+## Contextual blur
+
+blur 不再等同于“所有非选中行”。scroll view 先根据当前渲染上下文生成 `LineBlurPlan`，只把上下文内
+可见的非选中主歌词放进目标集合；离开上下文的 row 回到 0，避免复用时残留 filter 状态。没有选中行
+时集合为空。
+
+半径仍使用屏幕实测校准后的值。`filters.gaussianBlur.inputRadius` 的 transition 为：
+
+- duration `0.12` 秒；
+- cubic control points `(0.33, 0)` 与 `(0.2, 0.1)`；
+- model radius 先写最终值，显式动画从 presentation radius 开始；
+- 动画期间关闭 rasterization，且只有最新 animation generation 的 completion 可以恢复原状态。
+
+## AppKit 与 Core Animation 的所有权
+
+`NSView.frame` 和 `NSClipView.bounds` 是模型真值，backing layer 的 `position`、`frame`、`bounds`
+不能成为另一套持久状态。Core Animation 只承载 presentation：
+
+- model target 总是在动画安装前提交；
+- 中断时只从 `presentation()` 读取可见起点；
+- animation key 稳定，新动画替换同属性旧动画；
+- layout pass 可以随时重投影 backing layer，而不会改变最终状态。
+
+后续若直接长期修改 row backing layer 的 geometry，AppKit 下一次 layout 会把它重写，表现通常是
+换行中途突然跳回。不要用 completion 再补 model value，那会同时破坏 hit testing 和连续换行。
+
+## 与提案的差异和已知边界
+
+- 范围仍只有 main vocals；Background Vocals、duet alignment 和 agent transform 未实现。
+- 没有新增开关，新路径直接替换旧动画；非 Apple Music 来源只保留数据 fallback。
+- 提案要求精确路径不受 phrase 字段污染。最终代码把统一执行字段命名为
+  `emphasisDuration` / `emphasisGlyphCount`：结构化路径填真实 word 值，只有 fallback 才从 phrase 推断。
+- 提案最初把选中位置写成 `.top(12)`，并把 row descriptor 理解为所有可见行的 cascade。用户录屏与
+  `sub_10015A090`、`sub_10015CD84`、`sub_10015AA20` 的消费端复核推翻了这两点；最终实现改为
+  `.topRelative(40)` baseline anchor 与单 clip bounds spring。
+- 本次没有获得交互式 UI 验证授权，因此没有启动应用；位置与流畅度判断使用用户提供的 Apple Music
+  对比录屏，自动化 probe 验证 layer 层级、模型终点、presentation continuity、spring 参数、
+  relative baseline、换行顺序与 rasterization 生命周期。
+
+## 验证记录
+
+2026-08-29 的本地验证：
+
+- LyricsXPackage：99 项、10 个 suite 全部通过，原始退出码 0；其中集成测试实际执行本地 LyricsKit 的
+  flat/nested TTML、LRCX 往返、extended grapheme range 和损坏 payload fallback。
+- 新增回归先在旧实现上以原始退出码 1 失败：找不到 clip bounds spring，且 wrapped content layer
+  为 unflipped；修复后定向 5 项与完整 99 项均通过。行内两项真实时间轴 Metal probe 保持通过。
+- LyricsKit `LyricsService` target：隔离 SwiftPM 目录构建成功，原始退出码 0。
+- `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme：使用隔离 DerivedData 构建成功，
+  并从 workspace 链接本地 LyricsKit；本次修正后再次构建成功。
+- LyricsKit 全量 test target 目前在进入新测试前被既有
+  `GroupProviderTests.StaticProvider` / `FailingProvider` 未遵循当前 `LyricsProvider` protocol 阻断；
+  这两个文件不在本次改动中。不要把这次编译失败写成“新测试失败”。
+
+## 以后重做版本核对时
+
+Apple Music 私有实现会随版本变化。升级验证时应分别核对：word factor 的语言门槛、rise/return delay、
+deglow spring、normal/tap line spring、selected baseline fraction、blur membership 与 cubic curve。
+这些值集中在纯 plan 与 `LyricsSpecs`，不要先在 layer 执行代码里散改常数。
