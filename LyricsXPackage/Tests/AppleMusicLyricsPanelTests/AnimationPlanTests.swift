@@ -215,4 +215,102 @@ struct StructuredLineTextLayoutTests {
         #expect(word.emphasisGlyphCount == word.glyphs.count)
         #expect(layout.languageIdentifier == "en-US")
     }
+
+    @Test func consecutiveRapidFallbackWordsShareOneMotionEnvelope() throws {
+        let rapidLineContent = "You say you say what I should do"
+        let attributedString = NSAttributedString(
+            string: rapidLineContent,
+            attributes: [.font: NSFont.systemFont(ofSize: 32, weight: .bold)]
+        )
+        let expectedPhraseDuration: TimeInterval = 1.29
+        let wordTimings = [
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 0, timeOffset: 0),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 4, timeOffset: 0.16),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 8, timeOffset: 0.31),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 12, timeOffset: 0.45),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 16, timeOffset: 0.60),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 21, timeOffset: 0.75),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 23, timeOffset: 0.90),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 30, timeOffset: 1.12),
+        ]
+
+        let layout = try #require(AppleMusicLyrics.LineTextLayout.build(
+            attributed: attributedString,
+            content: rapidLineContent,
+            wordTimings: wordTimings,
+            lineDuration: expectedPhraseDuration,
+            textWidth: 800
+        ))
+        let expectedGlyphCount = layout.words.reduce(0) { partialCount, word in
+            partialCount + word.glyphs.count
+        }
+
+        #expect(layout.words.count == wordTimings.count)
+        #expect(layout.words.allSatisfy { word in
+            abs(word.emphasisDuration - expectedPhraseDuration) < 0.000_001
+        })
+        #expect(layout.words.allSatisfy { word in
+            word.emphasisGlyphCount == expectedGlyphCount
+        })
+    }
+
+    @Test func isolatedRapidFallbackWordsKeepTheirOwnMotionEnvelopes() throws {
+        let lineContent = "Go now"
+        let attributedString = NSAttributedString(
+            string: lineContent,
+            attributes: [.font: NSFont.systemFont(ofSize: 32, weight: .bold)]
+        )
+        let wordTimings = [
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 0, timeOffset: 0),
+            AppleMusicLyrics.WordTimingEntry(characterIndex: 3, timeOffset: 0.18),
+        ]
+        let expectedDurations: [TimeInterval] = [0.18, 0.22]
+
+        let layout = try #require(AppleMusicLyrics.LineTextLayout.build(
+            attributed: attributedString,
+            content: lineContent,
+            wordTimings: wordTimings,
+            lineDuration: 0.4,
+            textWidth: 400
+        ))
+
+        #expect(layout.words.count == expectedDurations.count)
+        #expect(
+            zip(layout.words.map(\.emphasisDuration), expectedDurations)
+                .allSatisfy { actualDuration, expectedDuration in
+                    abs(actualDuration - expectedDuration) < 0.000_001
+                }
+        )
+    }
+
+    @Test func rapidStructuredWordsKeepTheirExactAppleMusicEnvelopes() throws {
+        let lineContent = "ABC"
+        let attributedString = NSAttributedString(
+            string: lineContent,
+            attributes: [.font: NSFont.systemFont(ofSize: 32, weight: .bold)]
+        )
+        let synchronizedTextTiming = LyricsLine.Attachments.SynchronizedTextTiming(
+            words: [
+                .init(characterRange: 0 ..< 1, timeRange: 0.0 ..< 0.2),
+                .init(characterRange: 1 ..< 2, timeRange: 0.2 ..< 0.4),
+                .init(characterRange: 2 ..< 3, timeRange: 0.4 ..< 0.6),
+            ],
+            duration: 0.6
+        )
+
+        let layout = try #require(AppleMusicLyrics.LineTextLayout.build(
+            attributed: attributedString,
+            content: lineContent,
+            wordTimings: [],
+            synchronizedTextTiming: synchronizedTextTiming,
+            lineDuration: 0.6,
+            textWidth: 400
+        ))
+
+        #expect(layout.words.count == synchronizedTextTiming.words.count)
+        #expect(layout.words.allSatisfy { word in
+            word.timingSource == .synchronized
+                && abs(word.emphasisDuration - 0.2) < 0.000_001
+        })
+    }
 }

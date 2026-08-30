@@ -102,6 +102,15 @@ extension AppleMusicLyrics {
         static let interactiveSpringMass: CGFloat = 2
         static let interactiveSpringStiffness: CGFloat = 260
         static let interactiveSpringDamping: CGFloat = 50
+        static let cascadeSpringPeriod: TimeInterval = 0.6
+        static let cascadeSpringDampingRatio: CGFloat = 0.725
+        static let cascadeSettleDuration: TimeInterval = 0.5
+        static let cascadeStagger: TimeInterval = 0.08
+        static let cascadeAboveLineCount = 3
+        static let cascadeBelowLineCount = 6
+        static let rapidTransitionThreshold: TimeInterval = 0.4
+        static let rapidSettleSpringPeriod: TimeInterval = 0.5
+        static let rapidSettleDampingRatio: CGFloat = 1
 
         /// Apple Music's `.topRelative` value positions the text baseline at a
         /// percentage of the visible card height. Our row frame also includes its

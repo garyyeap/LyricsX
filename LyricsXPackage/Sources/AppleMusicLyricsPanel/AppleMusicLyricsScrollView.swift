@@ -36,6 +36,8 @@ extension AppleMusicLyrics {
         private var preferenceObservers: Set<AnyCancellable> = []
         private let lineTransitionCoordinator = LineTransitionCoordinator()
         private var pendingInteractiveTargetOriginalIndex: Int?
+        private var lastLineTransitionTime: CFTimeInterval?
+        private var lineTransitionTimeProvider: () -> CFTimeInterval = CACurrentMediaTime
         /// Apple Music ends the upper fade 70 points into its flipped lyrics
         /// container and starts the lower fade halfway through the viewport. This
         /// container is not flipped, so the gradient vector is reversed below while
@@ -46,21 +48,10 @@ extension AppleMusicLyrics {
         /// karaoke fill and the intro/interlude indicators together.
         private var resolvedPlaybackTime: TimeInterval = 0
 
-        /// `lineChangeSpringTimingParametersValues` (struct 0x2F8/0x300/0x308):
-        /// mass 1, stiffness 100, damping 18 → ωₙ = √(100/1) = 10, ζ = 18/(2·√100) = 0.9.
-        ///
-        /// Confirmed against Music 26.5.2 on screen, at full frame rate: three
-        /// consecutive one-line advances each travel 80-90 pt and are delivered in
-        /// 27-28 steps over 450 ms — i.e. Music moves the clip on *every* display
-        /// frame — with step sizes ramping 1 3 4 5 5 6 6 and decaying 5 5 4 4 3 3
-        /// 2 2 1 1 1. A 6 pt step at 60 Hz is 360 pt/s, and for ζ = 0.9 the peak
-        /// speed of a spring is `travel · ωₙ · 0.395`, which puts ωₙ at 10.1.
-        ///
-        /// An earlier pass measured 570 pt/s and "fitted" ωₙ ≈ 15 from a 30 fps
-        /// recording. That was an aliasing artifact: sampling 60 Hz motion at
-        /// 30 Hz merges two frames into one and doubles the apparent per-frame
-        /// step. The dumped constants were right all along — capture at the
-        /// display's own rate before fitting anything to a motion curve.
+        /// Normal advances use the previous SwiftUI row cascade because one
+        /// highly damped clip spring makes the stack look like a rigid translation.
+        /// Rapid advances settle the clip as a unit so delayed row springs cannot
+        /// pile up when several highlights arrive together.
         private var lastHighlightedPosition: Int?
         /// A line advance further than this (e.g. a seek) snaps instantly instead of
         /// springing across the whole song.
@@ -116,6 +107,10 @@ extension AppleMusicLyrics {
         deinit {
             NotificationCenter.default.removeObserver(self)
             displayLink = nil
+        }
+
+        func setLineTransitionTimeProvider(_ provider: @escaping () -> CFTimeInterval) {
+            lineTransitionTimeProvider = provider
         }
 
         private func setupScrollView() {
@@ -266,6 +261,7 @@ extension AppleMusicLyrics {
 
         private func rebuildLineViews() {
             lastHighlightedPosition = nil
+            lastLineTransitionTime = nil
             pendingInteractiveTargetOriginalIndex = nil
             lineTransitionCoordinator.cancel(scrollView: scrollView)
             enabledLineViews.forEach { $0.removeFromSuperview() }
@@ -395,6 +391,10 @@ extension AppleMusicLyrics {
             if let new = originalIndex, let view = lineViewByOriginalIndex[new] {
                 view.setHighlighted(true)
             }
+            if !animated {
+                lastHighlightedPosition = originalIndex.flatMap { lineViewByOriginalIndex[$0]?.enabledPosition }
+                lastLineTransitionTime = nil
+            }
             let isFollowing = interactionState?.isFollowing ?? true
             if isFollowing, let new = originalIndex {
                 if animated, window != nil {
@@ -407,22 +407,31 @@ extension AppleMusicLyrics {
         }
 
         /// Move to a newly highlighted line while following. A large noninteractive
-        /// jump snaps instantly; every normal advance springs the clip bounds to
-        /// the selected baseline anchor. Rapid successive line changes stay
-        /// continuous because each replacement spring starts at the clip's current
-        /// presentation origin.
+        /// jump snaps instantly, a rapid sequence settles the clip as a unit, and a
+        /// normal advance runs the row cascade restored from the SwiftUI renderer.
         private func advanceFollowing(toOriginalIndex originalIndex: Int) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
             let newPosition = view.enabledPosition
             let usesInteractiveSpring = pendingInteractiveTargetOriginalIndex == originalIndex
             pendingInteractiveTargetOriginalIndex = nil
             let isJump = lastHighlightedPosition.map { abs(newPosition - $0) > scrollJumpThreshold } ?? true
+            let currentLineTransitionTime = lineTransitionTimeProvider()
+            let isRapid = lastLineTransitionTime.map { previousLineTransitionTime in
+                let elapsedTime = currentLineTransitionTime - previousLineTransitionTime
+                return elapsedTime >= 0 && elapsedTime < LineTransitionPlan.rapidTransitionThreshold
+            } ?? false
             lastHighlightedPosition = newPosition
-            centerLine(
-                originalIndex: originalIndex,
-                animated: usesInteractiveSpring || !isJump,
-                usesInteractiveSpring: usesInteractiveSpring
-            )
+            lastLineTransitionTime = currentLineTransitionTime
+
+            if usesInteractiveSpring {
+                centerLine(originalIndex: originalIndex, animated: true, usesInteractiveSpring: true)
+            } else if isJump {
+                centerLine(originalIndex: originalIndex, animated: false)
+            } else if isRapid {
+                settleLine(originalIndex: originalIndex)
+            } else {
+                cascadeLine(originalIndex: originalIndex)
+            }
         }
 
         private func updateDistances(animated: Bool) {
@@ -471,6 +480,43 @@ extension AppleMusicLyrics {
 
         // MARK: Scrolling
 
+        private func cascadeLine(originalIndex: Int) {
+            guard let view = lineViewByOriginalIndex[originalIndex] else { return }
+            let springTiming = SpringTimingParameters(
+                dampingRatio: LineTransitionPlan.cascadeSpringDampingRatio,
+                period: LineTransitionPlan.cascadeSpringPeriod
+            )
+            let configuration = LineCascadeConfiguration(
+                selectedLinePosition: view.enabledPosition,
+                springTiming: springTiming,
+                settleDuration: LineTransitionPlan.cascadeSettleDuration,
+                stagger: LineTransitionPlan.cascadeStagger,
+                aboveLineCount: LineTransitionPlan.cascadeAboveLineCount,
+                belowLineCount: LineTransitionPlan.cascadeBelowLineCount
+            )
+            lineTransitionCoordinator.transitionLines(
+                scrollView: scrollView,
+                lineViews: enabledLineViews,
+                targetClipVerticalOrigin: clampedClipVerticalOrigin(for: view),
+                configuration: configuration,
+                animated: window != nil
+            )
+        }
+
+        private func settleLine(originalIndex: Int) {
+            guard let view = lineViewByOriginalIndex[originalIndex] else { return }
+            let timing = SpringTimingParameters(
+                dampingRatio: LineTransitionPlan.rapidSettleDampingRatio,
+                period: LineTransitionPlan.rapidSettleSpringPeriod
+            )
+            lineTransitionCoordinator.transitionClip(
+                scrollView: scrollView,
+                targetClipVerticalOrigin: clampedClipVerticalOrigin(for: view),
+                timing: timing,
+                animated: window != nil
+            )
+        }
+
         private func centerLine(
             originalIndex: Int,
             animated: Bool,
@@ -489,7 +535,7 @@ extension AppleMusicLyrics {
                     stiffness: LineTransitionPlan.normalSpringStiffness,
                     damping: LineTransitionPlan.normalSpringDamping
                 )
-            lineTransitionCoordinator.transition(
+            lineTransitionCoordinator.transitionClip(
                 scrollView: scrollView,
                 targetClipVerticalOrigin: targetClipVerticalOrigin,
                 timing: timing,
@@ -511,7 +557,7 @@ extension AppleMusicLyrics {
                 stiffness: LineTransitionPlan.normalSpringStiffness,
                 damping: LineTransitionPlan.normalSpringDamping
             )
-            lineTransitionCoordinator.transition(
+            lineTransitionCoordinator.transitionClip(
                 scrollView: scrollView,
                 targetClipVerticalOrigin: targetVerticalOrigin,
                 timing: timing,

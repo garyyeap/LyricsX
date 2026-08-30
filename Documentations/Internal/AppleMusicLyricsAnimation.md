@@ -8,8 +8,8 @@
 ## 一句话
 
 主歌词现在走两条明确的数据路径：Apple Music TTML 保留真实的 word/syllable range 与结束时间，
-按 Apple Music 26.6 的 factor、stagger、clip bounds spring 和 contextual blur 执行动画；没有结构化数据的
-其他歌词继续走原来的 phrase 推断，不伪造不存在的层级。
+按 Apple Music 26.6 的 factor、stagger 和 contextual blur 执行动画；行间切换使用用户确认过观感的旧
+SwiftUI cascade。没有结构化数据的其他歌词继续走原来的 phrase 推断，不伪造不存在的层级。
 
 ## 最终数据链
 
@@ -73,6 +73,16 @@ word 包含内层 timed span 时，内层 span 原样成为 syllable。解析仍
 缺少它时，既有 `InlineTimeTag` 仍会把相邻字符归回 phrase；这条 fallback 保留原有的满强度 factor
 与首 glyph 零延迟，避免非 Apple Music 来源突然改变观感。
 
+`InlineTimeTag` 也可能把一段快速演唱拆成连续的空格分隔单元，却没有 Apple Music 用来区分 word 与
+syllable 的层级。若同一视觉行里连续至少三个 fallback 单元各自现有的 `emphasisDuration` 不超过
+`0.25` 秒，`LineTextLayout` 会让这一段共享 phrase 的 `emphasisDuration` 与
+`emphasisGlyphCount`，直到遇到普通速度单元、换行或累计时长超过 `3` 秒。各单元自身的
+`timeRange` 不变，因此起跳时刻和 karaoke progression 仍服从来源数据；改变的只是 spring period，
+避免每个单元都在一两百毫秒内独立起跳和回落。少于三个的孤立快词不会被合并。
+
+这条 `0.25` 秒规则是缺少结构化层级时的项目 fallback，不是从 Apple Music 26.6 恢复出的常量。
+结构化 `SynchronizedTextTiming` 即使 word 很短也始终保留原始 envelope。
+
 ### factor 与语言能力
 
 结构化路径按歌词的 `lang` id tag 取基础语言代码。`ar`、`he`、`zh`、`ja`（含地区后缀）保留 lift，
@@ -119,22 +129,24 @@ targetY  = max(lineFrame.minY - topInset, 0)
 `mainTextFirstBaselineOffset`。这样定位的是第一条文字 baseline，而不是 row 外框顶部；窗口高度变化时
 会重新计算，不能退回固定点数。
 
-`LineTransitionCoordinator` 只给 `NSClipView` backing layer 安装一条 `bounds.origin.y` spring：
+普通自动换行恢复旧 SwiftUI 版本的 cascade，但执行端改为 Core Animation：
 
-1. 从 clip presentation layer 读取当前可见 origin。
-2. 在关闭 implicit actions 的 transaction 中提交最终 `NSClipView.bounds` 模型值。
-3. spring 从可见 origin 运行到模型终点；中途换行会从新的 presentation origin 接续。
-4. 同一目标仍在运行时不重启动画；离屏、初始化和非交互大跨度 seek 直接落到模型终点。
+1. 从 clip 与即将参与动画的 row presentation layer 读取当前可见位置。
+2. 在关闭 implicit actions 的同一个 transaction 中把 `NSClipView.bounds` 提交到新 anchor；row 的
+   AppKit model frame 始终不变。
+3. 用完整 clip displacement 反向补偿附近 row 的 presentation 起点，因此提交 scroll model 时画面
+   不会瞬移。
+4. 选中行上方最多 3 行以 `0.5` 秒 ease-in-out 归位；选中行及下方最多 6 行使用
+   `period 0.6 / dampingRatio 0.725` 的 spring，每行错开 `0.08` 秒。
+5. 新 cascade 从旧动画的 row presentation position 接续，并以稳定 animation key 替换旧动画；整个
+   过程由 render server 插值，不在 DisplayLink callback 里逐帧改 frame 或触发 layout。
 
-常规换行为 `mass 1 / stiffness 100 / damping 18`。点击歌词跳转使用
-`mass 2 / stiffness 260 / damping 50`，即使跨度较大也执行。
+两次高亮变化相隔不足 `0.4` 秒时，不继续叠加 delayed row spring：coordinator 会清掉 cascade，并让
+clip 从当前 presentation origin 走 `period 0.5 / dampingRatio 1` 的无反弹 settle。初始化、离屏和
+非交互大跨度 seek 直接落到模型终点。点击歌词跳转继续使用
+`mass 2 / stiffness 260 / damping 50` 的 interactive clip spring，即使跨度较大也执行。
 
-Apple Music 的 update result 可以同时包含 clip bounds 与 row frame update，但后者只对应模型 frame
-真实变化的行。当前 main-vocal selection 不改变任何 row frame，因此正常切行不能给所有可见行再添加
-一份完整 clip displacement。旧实现正是这样制造出大量 `position.y` spring，并在切行瞬间逐行
-`layoutSubtreeIfNeeded()`，带 blur、mask 和 rasterized word 的 layer tree 会一起重新合成，造成录屏中的卡顿。
-
-instrumental dots 仍然居中，但复用同一个 coordinator 和常规 clip spring，不再维护第二套动画状态。
+instrumental dots 仍然居中，并复用 coordinator 的 clip spring，不维护第二套逐帧动画状态。
 
 ## 多行文本坐标
 
@@ -219,9 +231,14 @@ row spacing，也没有保留额外 viewport inset。
 - 没有新增开关，新路径直接替换旧动画；非 Apple Music 来源只保留数据 fallback。
 - 提案要求精确路径不受 phrase 字段污染。最终代码把统一执行字段命名为
   `emphasisDuration` / `emphasisGlyphCount`：结构化路径填真实 word 值，只有 fallback 才从 phrase 推断。
-- 提案最初把选中位置写成 `.top(12)`，并把 row descriptor 理解为所有可见行的 cascade。用户录屏与
-  `sub_10015A090`、`sub_10015CD84`、`sub_10015AA20` 的消费端复核推翻了这两点；最终实现改为
-  `.topRelative(40)` baseline anchor 与单 clip bounds spring。
+- Apple Music 26.6 的精确公式没有最小 spring period；非结构化来源的连续快词因为缺失 word/syllable
+  层级，额外使用上述 fallback phrase envelope。它只修正运动曲线，不修改来源 timing，也不进入
+  `SynchronizedTextTiming` 路径。
+- 提案最初把选中位置写成 `.top(12)`，二进制消费端复核随后把精确定位修正为
+  `.topRelative(40)`，并表明 Apple Music 的 normal update 由单 clip bounds spring 承担。项目曾完全
+  按这条私有机制实现，但 `mass 1 / stiffness 100 / damping 18` 的超调不足一个像素，用户确认视觉上
+  仍是刚性平移；旧 SwiftUI cascade 反而更接近目标观感。因此当前版本保留 40% baseline anchor，另加
+  presentation-only row cascade。这是项目的视觉校准，不再宣称是 Apple Music 私有 row update 的逐项还原。
 - 第一版只移植了 LyricsX 内部的 contextual blur，漏掉 Music 外层
   `LyricsXViewController.maskLayer`，导致所有非选中行在 viewport 内同样可见。第一次修正又选中了
   pretty mode 的 128 / 128 point 对称分支；第二张并排截图和汇编复核把 locations 改为 non-pretty
@@ -295,6 +312,28 @@ row spacing，也没有保留额外 viewport inset。
   0.4125，gradient vector 的起点和终点也与目标相反。修复后渐隐与完整高度两项定向回归通过；
   LyricsXPackage 108 项、13 个 suite 全部通过，原始退出码 0；隔离 DerivedData 的 LyricsX workspace
   Debug build 成功。未启动应用做交互式 UI 验证。
+
+2026-08-30 快速 fallback word 的运动 envelope：
+
+- 使用真实歌词 `You say you say what I should do` 的 0.14–0.22 秒 inline timing 增加回归；旧实现下
+  每个空格分隔单元仍使用自己的短 spring，测试以原始退出码 1 失败。
+- 修复后连续快词、孤立快词和结构化快词共 4 项 layout 回归全部通过；LyricsXPackage 117 项、
+  15 个 suite 在 `--no-parallel` 下全部通过，原始退出码 0。
+- 默认并行全量运行仍会触发既有 `WidgetDataStoreTests.writeAndRead` 与 `clearData` 共用同一静态 suite
+  名称的竞态；单独运行失败项通过。本次没有修改该测试或 widget data store。
+- `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功。未启动
+  应用做交互式 UI 验证。
+
+2026-08-30 恢复旧 SwiftUI 行间 cascade：
+
+- 回归先在单 clip spring 实现上以原始退出码 1 失败：普通换行仍存在 1 个 clip bounds spring，附近
+  row 的 `position.y` animation 为 0，无法产生逐行弹跳。
+- 修复后 6 项 `LineTransitionProbes` 全部通过：普通换行有 3 行上方 smooth settle 与当前行加下方
+  5 行 spring cascade，spring 间隔为 80 ms；快速连续换行会取消 row cascade，并从当前可见 clip
+  origin 开始 critically damped settle；点击歌词仍使用原有 interactive clip spring。
+- LyricsXPackage 117 项、15 个 suite 在 `--no-parallel` 下全部通过，原始退出码 0；
+  `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功。
+- 本次没有启动应用做交互式 UI 验证；最终视觉效果仍需在真实歌词播放中与 Apple Music 并排确认。
 
 ## 以后重做版本核对时
 

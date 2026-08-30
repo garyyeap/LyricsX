@@ -77,6 +77,15 @@ extension AppleMusicLyrics {
 }
 
 extension AppleMusicLyrics.LineTextLayout {
+    /// Legacy inline timing does not carry Apple Music's word and syllable
+    /// hierarchy. A source may instead emit a separate whitespace-delimited unit
+    /// every one or two tenths of a second, which makes each unit request its own
+    /// extremely short spring. Keep isolated short words untouched, but let a
+    /// sustained rapid passage share the phrase envelope that the fallback path
+    /// already uses for character-level timing.
+    private static let maximumRapidFallbackWordDuration: TimeInterval = 0.25
+    private static let minimumRapidFallbackWordCount = 3
+
     /// Lay `attributed` out and group its glyphs into words using `wordTimings`.
     ///
     /// `wordTimings` character indices are offsets into `content` counted in
@@ -219,6 +228,61 @@ extension AppleMusicLyrics.LineTextLayout {
             }
         }
         closePhrase(endingBefore: words.count)
+        assignRapidFallbackMotionEnvelopes(to: &words)
+    }
+
+    /// Share only the spring duration and timing glyph count for a sustained run
+    /// of rapid legacy words. The words keep their own start times and ranges, so
+    /// karaoke progression remains source-accurate while the lift no longer
+    /// starts and reverses on a sub-quarter-second spring for every word.
+    private static func assignRapidFallbackMotionEnvelopes(to words: inout [Word]) {
+        var rapidWordIndices: [Int] = []
+
+        func closeRapidWordRun() {
+            defer { rapidWordIndices.removeAll(keepingCapacity: true) }
+            guard rapidWordIndices.count >= minimumRapidFallbackWordCount,
+                  let firstWordIndex = rapidWordIndices.first,
+                  let lastWordIndex = rapidWordIndices.last,
+                  let startingTime = words[firstWordIndex].timeRange?.lowerBound,
+                  let endingTime = words[lastWordIndex].timeRange?.upperBound
+            else {
+                return
+            }
+
+            let sharedDuration = max(0, endingTime - startingTime)
+            let sharedGlyphCount = rapidWordIndices.reduce(0) { glyphCount, wordIndex in
+                glyphCount + words[wordIndex].glyphs.count
+            }
+            for wordIndex in rapidWordIndices {
+                words[wordIndex].emphasisDuration = sharedDuration
+                words[wordIndex].emphasisGlyphCount = max(1, sharedGlyphCount)
+            }
+        }
+
+        for wordIndex in words.indices {
+            let word = words[wordIndex]
+            let isRapidFallbackWord = word.timingSource == .inferred
+                && word.timeRange != nil
+                && word.emphasisDuration > 0
+                && word.emphasisDuration <= maximumRapidFallbackWordDuration
+            guard isRapidFallbackWord else {
+                closeRapidWordRun()
+                continue
+            }
+
+            if let firstWordIndex = rapidWordIndices.first,
+               let startingTime = words[firstWordIndex].timeRange?.lowerBound,
+               let endingTime = word.timeRange?.upperBound {
+                let changesVisualLine = words[firstWordIndex].visualLineIndex != word.visualLineIndex
+                let exceedsMaximumSpringPeriod = endingTime - startingTime
+                    > AppleMusicLyrics.LyricsSpecs.maximumEmphasisSpringPeriod
+                if changesVisualLine || exceedsMaximumSpringPeriod {
+                    closeRapidWordRun()
+                }
+            }
+            rapidWordIndices.append(wordIndex)
+        }
+        closeRapidWordRun()
     }
 
     /// One word boundary, already converted to UTF-16 so it can be compared

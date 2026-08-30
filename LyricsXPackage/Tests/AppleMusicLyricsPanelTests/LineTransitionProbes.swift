@@ -73,7 +73,21 @@ struct LineTransitionProbes {
         }
     }
 
-    @Test func normalLineChangeUsesOneClipSpringAndAnchorsTheSelectedBaseline() throws {
+    private static func linePositionAnimationCount(in scrollView: NSScrollView) -> Int {
+        lineViews(in: scrollView).reduce(0) { animationCount, lineView in
+            guard let lineLayer = lineView.layer,
+                  let animation = lineLayer.animation(
+                      forKey: AppleMusicLyrics.LineTransitionCoordinator.linePositionAnimationKey
+                  ) as? CAPropertyAnimation,
+                  animation.keyPath == "position.y"
+            else {
+                return animationCount
+            }
+            return animationCount + 1
+        }
+    }
+
+    @Test func normalLineChangeUsesTheSwiftUICascadeAndAnchorsTheSelectedBaseline() throws {
         let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
         let (container, window) = Self.makeMountedContainer()
         defer {
@@ -81,24 +95,32 @@ struct LineTransitionProbes {
             window.close()
         }
 
-        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3, 4])
+        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
 
         let scrollView = try Self.scrollView(of: container)
         let clipBoundsSprings = Self.clipBoundsSprings(in: scrollView)
-        #expect(clipBoundsSprings.count == 1)
-        let spring = try #require(
-            clipBoundsSprings.first,
-            "a normal line change should animate the clip bounds"
-        )
-        #expect(Self.linePositionSprings(in: scrollView).isEmpty)
-        #expect(abs(Double(spring.mass) - 1) < 0.001)
-        #expect(abs(Double(spring.stiffness) - 100) < 1)
-        #expect(abs(Double(spring.damping) - 18) < 0.5)
+        #expect(clipBoundsSprings.isEmpty)
 
-        let targetClipOrigin = try CGFloat(#require(spring.toValue as? CGFloat))
-        #expect(abs(scrollView.contentView.bounds.origin.y - targetClipOrigin) < 0.5)
+        let linePositionSprings = Self.linePositionSprings(in: scrollView)
+        #expect(Self.linePositionAnimationCount(in: scrollView) == 9)
+        #expect(linePositionSprings.count == 6)
+        let expectedStiffness = pow(2 * Double.pi / 0.6, 2)
+        let expectedDamping = 0.725 * 2 * sqrt(expectedStiffness)
+        for spring in linePositionSprings {
+            #expect(abs(Double(spring.mass) - 1) < 0.001)
+            #expect(abs(Double(spring.stiffness) - expectedStiffness) < 1)
+            #expect(abs(Double(spring.damping) - expectedDamping) < 0.5)
+            #expect(spring.fillMode == .both)
+            let startingPosition = try CGFloat(#require(spring.fromValue as? CGFloat))
+            let endingPosition = try CGFloat(#require(spring.toValue as? CGFloat))
+            #expect(abs(startingPosition - endingPosition) > 1)
+        }
+        let orderedBeginTimes = linePositionSprings.map(\.beginTime).sorted()
+        #expect(zip(orderedBeginTimes.dropFirst(), orderedBeginTimes).allSatisfy { laterTime, earlierTime in
+            abs((laterTime - earlierTime) - 0.08) < 0.005
+        })
 
-        let selectedLine = try #require(Self.lineViews(in: scrollView).first { $0.originalIndex == 4 })
+        let selectedLine = try #require(Self.lineViews(in: scrollView).first { $0.originalIndex == 3 })
         let selectedBaselineInViewport = selectedLine.frame.minY
             - scrollView.contentView.bounds.origin.y
             + selectedLine.mainTextFirstBaselineOffset
@@ -173,7 +195,7 @@ struct LineTransitionProbes {
         #expect(currentSpring.toValue as? CGFloat == firstSpring.toValue as? CGFloat)
     }
 
-    @Test func interruptedLineChangeContinuesFromTheVisibleClipOrigin() throws {
+    @Test func rapidLineChangeCancelsTheCascadeAndSettlesFromTheVisibleClipOrigin() throws {
         let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
         let (container, window) = Self.makeMountedContainer()
         defer {
@@ -181,14 +203,25 @@ struct LineTransitionProbes {
             window.close()
         }
 
+        var currentLineTransitionTime: CFTimeInterval = 100
+        container.setLineTransitionTimeProvider { currentLineTransitionTime }
+
         Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
         let scrollView = try Self.scrollView(of: container)
+        #expect(Self.linePositionSprings(in: scrollView).count == 6)
         let clipLayer = try #require(scrollView.contentView.layer)
         let visibleOriginBeforeInterruption = (clipLayer.presentation() ?? clipLayer).bounds.origin.y
 
+        currentLineTransitionTime += 0.1
         Self.advanceHighlight(container, lyrics: lyrics, through: [4])
 
         let replacementSpring = try #require(Self.clipBoundsSprings(in: scrollView).first)
+        #expect(Self.linePositionAnimationCount(in: scrollView) == 0)
+        let expectedStiffness = pow(2 * Double.pi / 0.5, 2)
+        let expectedDamping = 2 * sqrt(expectedStiffness)
+        #expect(abs(Double(replacementSpring.mass) - 1) < 0.001)
+        #expect(abs(Double(replacementSpring.stiffness) - expectedStiffness) < 1)
+        #expect(abs(Double(replacementSpring.damping) - expectedDamping) < 0.5)
         let replacementStartingOrigin = try CGFloat(#require(replacementSpring.fromValue as? CGFloat))
         #expect(abs(replacementStartingOrigin - visibleOriginBeforeInterruption) < 0.5)
     }
