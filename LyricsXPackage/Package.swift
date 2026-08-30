@@ -101,10 +101,6 @@ let package = Package(
             from: "0.9.0"
         ),
         .package(
-            url: "https://github.com/Lakr233/ColorfulX",
-            exact: "5.6.4"
-        ),
-        .package(
             url: "https://github.com/Lakr233/MSDisplayLink",
             from: "2.0.0"
         ),
@@ -130,30 +126,32 @@ let package = Package(
                 "LyricsXFoundation",
                 .product(name: "MusicPlayer", package: "MusicPlayer"),
                 .product(name: "UIFoundation", package: "UIFoundation"),
-                .product(name: "ColorfulX", package: "ColorfulX"),
                 .product(name: "MSDisplayLink", package: "MSDisplayLink"),
+            ],
+            resources: [
+                .process("ArtworkGradientShaders.metal"),
             ],
             swiftSettings: [
                 // The sources moved here verbatim from the app target, which
                 // builds with SWIFT_VERSION 5 — this keeps them compiling
                 // identically instead of also taking on a strict-concurrency
                 // migration in the same change.
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
             ]
         ),
         .testTarget(
             name: "AppleMusicLyricsPanelTests",
             dependencies: [
-                "AppleMusicLyricsPanel"
+                "AppleMusicLyricsPanel",
             ],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
             ]
         ),
         .testTarget(
             name: "LyricsXFoundationTests",
             dependencies: [
-                "LyricsXFoundation"
+                "LyricsXFoundation",
             ]
         ),
         .testTarget(
@@ -162,4 +160,3 @@ let package = Package(
         ),
     ]
 )
-

@@ -112,6 +112,9 @@ extension AppleMusicLyrics {
         override init() {
             super.init()
             isGeometryFlipped = true
+            // The word color layers are children of the mask rather than this
+            // layer, so their coordinate parent needs the same y-down geometry.
+            glyphMaskContainer.isGeometryFlipped = true
             addSublayer(backgroundColorLayer)
             mask = glyphMaskContainer
             backgroundColorLayer.backgroundColor = unsungColor

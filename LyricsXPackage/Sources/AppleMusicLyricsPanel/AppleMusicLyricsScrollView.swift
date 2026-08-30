@@ -18,6 +18,7 @@ extension AppleMusicLyrics {
 
         private let scrollView = NSScrollView()
         private let documentView = FlippedDocumentView()
+        private let viewportMaskLayer = CAGradientLayer()
 
         // MARK: State
 
@@ -35,6 +36,12 @@ extension AppleMusicLyrics {
         private var preferenceObservers: Set<AnyCancellable> = []
         private let lineTransitionCoordinator = LineTransitionCoordinator()
         private var pendingInteractiveTargetOriginalIndex: Int?
+        /// Apple Music ends the upper fade 70 points into its flipped lyrics
+        /// container and starts the lower fade halfway through the viewport. This
+        /// container is not flipped, so the gradient vector is reversed below while
+        /// retaining Apple's recovered stop locations.
+        private let viewportTopEdgeFadeDistance: CGFloat = 70
+        private let viewportBottomFadeStartLocation: CGFloat = 0.5
         /// The lyrics display time resolved once per display-link frame; drives the
         /// karaoke fill and the intro/interlude indicators together.
         private var resolvedPlaybackTime: TimeInterval = 0
@@ -85,6 +92,7 @@ extension AppleMusicLyrics {
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
             wantsLayer = true
+            configureViewportMask()
             setupScrollView()
             NotificationCenter.default.addObserver(
                 self,
@@ -120,7 +128,43 @@ extension AppleMusicLyrics {
             // this layer, so create it before the first highlight update.
             scrollView.contentView.wantsLayer = true
             scrollView.documentView = documentView
+            scrollView.frame = bounds
             addSubview(scrollView)
+        }
+
+        private func configureViewportMask() {
+            viewportMaskLayer.colors = [
+                CGColor(gray: 1, alpha: 0),
+                CGColor(gray: 1, alpha: 1),
+                CGColor(gray: 1, alpha: 1),
+                CGColor(gray: 1, alpha: 0),
+            ]
+            viewportMaskLayer.startPoint = CGPoint(x: 0.5, y: 1)
+            viewportMaskLayer.endPoint = CGPoint(x: 0.5, y: 0)
+            layer?.mask = viewportMaskLayer
+            updateViewportMaskGeometry()
+        }
+
+        private func updateViewportMaskGeometry() {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            viewportMaskLayer.frame = bounds
+            let topFadeEndLocation: CGFloat
+            if bounds.height > 0 {
+                topFadeEndLocation = min(
+                    viewportBottomFadeStartLocation,
+                    viewportTopEdgeFadeDistance / bounds.height
+                )
+            } else {
+                topFadeEndLocation = viewportBottomFadeStartLocation
+            }
+            viewportMaskLayer.locations = [
+                0,
+                NSNumber(value: Double(topFadeEndLocation)),
+                NSNumber(value: Double(viewportBottomFadeStartLocation)),
+                1,
+            ]
+            CATransaction.commit()
         }
 
         override func viewDidMoveToWindow() {
@@ -293,6 +337,10 @@ extension AppleMusicLyrics {
 
         override func layout() {
             super.layout()
+            if layer?.mask !== viewportMaskLayer {
+                layer?.mask = viewportMaskLayer
+            }
+            updateViewportMaskGeometry()
             scrollView.frame = bounds
             if bounds.size != lastLaidOutSize {
                 relayout()

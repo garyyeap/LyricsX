@@ -19,7 +19,7 @@ Apple Music TTML
   → LyricsLine.Attachments.SynchronizedTextTiming
   → LRCX [synchronized-timing] + 既有 [tt]
   → AppleMusicLyricsPanel LineTextLayout
-  → WordEmphasisPlan / LineTransitionPlan / LineBlurPlan
+  → WordEmphasisPlan / LineTransitionPlan / LineBlurPlan / viewport mask
   → CALayer 显式动画
 ```
 
@@ -158,6 +158,48 @@ blur 不再等同于“所有非选中行”。scroll view 先根据当前渲染
 - model radius 先写最终值，显式动画从 presentation radius 开始；
 - 动画期间关闭 rasterization，且只有最新 animation generation 的 completion 可以恢复原状态。
 
+### 外层 viewport edge fade
+
+行级 blur 本身不是距离渐变。`SyncedLyricsLineLayer` 对进入 `blurredLineViews` 的 row 使用固定半径；
+远处歌词逐渐消失来自更外层的 `Music.LyricsXViewController.maskLayer`。26.6 的类型信息确认该字段是
+`CAGradientLayer`，`sub_1001284F8` 把它安装到完整歌词 container 的 backing layer，并设置：
+
+```text
+colors    = [clear, white, white, clear]
+locations = [0, firstFadeDistance / height,
+             1 - secondFadeDistance / height, 1]
+```
+
+汇编中的分支不能只看“是否自动跟随”：pretty mode 自动跟随时两个 distance 都是 128 point，手动
+scroll 时都是 30 point；non-pretty 自动跟随路径的 first distance 是 70 point，second distance 是
+视口高度的一半，因此得到 `[0, 70 / height, 0.5, 1]`。
+
+Music 把 mask 安装在 flipped 的 `AMPFlippedDocumentView` 上，上述 locations 因而是在 flipped geometry
+中解释的。本项目把 mask 安装在外层、未 flipped 的 `SyncedLyricsContainerView` 上；内部 document view
+是否 flipped 不会改变外层 mask 的坐标。locations 必须保留二进制恢复值，同时反转 gradient vector：
+
+```text
+colors     = [clear, white, white, clear]
+locations  = [0, 70 / height, 0.5, 1]
+startPoint = (0.5, 1)
+endPoint   = (0.5, 0)
+```
+
+映射后的视觉结果是：顶部约 70 point 从透明过渡到完全不透明，中段保持完全不透明，底部从半屏处开始
+渐隐到透明。选中歌词 baseline 位于距视觉顶部 40% 的位置，因此不会再被 mask 降到约 78% opacity。
+
+mask 只创建一次，每次 layout 在关闭 implicit animation 的 transaction 中更新 frame 和 locations，
+不参与 display-link tick。
+
+`NSScrollView` viewport 与 Apple Music 一样继续使用 container 的完整 bounds，不增加物理 top / bottom
+inset；边缘空间完全由 mask 的 alpha transition 形成。曾尝试上下各缩进 32 point，但用户并排截图
+确认这种硬留白与 Apple Music 不符，随后撤销。
+
+因此不能把视觉上的渐隐误实现为“离选中行越远，Gaussian blur radius 越大”。那既不符合二进制结构，
+也会让更多大半径 filter 参与行间 spring 合成。非选中行仍保持统一的基础 alpha 和固定 blur，连续的
+上下衰减只由 viewport mask 负责。用户反馈的边缘观感不是 row 的真实文字间距不足，因此没有扩大
+row spacing，也没有保留额外 viewport inset。
+
 ## AppKit 与 Core Animation 的所有权
 
 `NSView.frame` 和 `NSClipView.bounds` 是模型真值，backing layer 的 `position`、`frame`、`bounds`
@@ -180,6 +222,15 @@ blur 不再等同于“所有非选中行”。scroll view 先根据当前渲染
 - 提案最初把选中位置写成 `.top(12)`，并把 row descriptor 理解为所有可见行的 cascade。用户录屏与
   `sub_10015A090`、`sub_10015CD84`、`sub_10015AA20` 的消费端复核推翻了这两点；最终实现改为
   `.topRelative(40)` baseline anchor 与单 clip bounds spring。
+- 第一版只移植了 LyricsX 内部的 contextual blur，漏掉 Music 外层
+  `LyricsXViewController.maskLayer`，导致所有非选中行在 viewport 内同样可见。第一次修正又选中了
+  pretty mode 的 128 / 128 point 对称分支；第二张并排截图和汇编复核把 locations 改为 non-pretty
+  自动跟随路径的 `[0, 70 / height, 0.5, 1]`。之后先后尝试 128 point 底边校准与
+  `[0, 0.5, 0.5, 1]` 对称渐隐，但仍直接沿用了 Music 的 gradient direction，忽略了两边 mask target
+  的 flipped 状态不同；对称版本还让位于视觉顶部 40% 的选中行进入 fade。最终保留恢复出的
+  `[0, 70 / height, 0.5, 1]`，并在未 flipped 的外层 container 上反转 gradient vector。曾加入的
+  scroll viewport 上下各 32 point 留白也被并排截图证明与 Apple Music 不符，最终恢复完整 container
+  height。仍然没有恢复距离型 blur、距离型 alpha 或扩大 row spacing。
 - 本次没有获得交互式 UI 验证授权，因此没有启动应用；位置与流畅度判断使用用户提供的 Apple Music
   对比录屏，自动化 probe 验证 layer 层级、模型终点、presentation continuity、spring 参数、
   relative baseline、换行顺序与 rasterization 生命周期。
@@ -195,12 +246,59 @@ blur 不再等同于“所有非选中行”。scroll view 先根据当前渲染
 - LyricsKit `LyricsService` target：隔离 SwiftPM 目录构建成功，原始退出码 0。
 - `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme：使用隔离 DerivedData 构建成功，
   并从 workspace 链接本地 LyricsKit；本次修正后再次构建成功。
+- viewport edge fade 回归在缺少 mask 时以原始退出码 1 失败；补上 mask 后定向测试通过，完整
+  LyricsXPackage 106 项全部通过、原始退出码 0，随后 workspace Debug scheme 使用隔离 DerivedData
+  再次构建成功。
+- 非对称 viewport edge fade 回归在 128 / 128 point 实现上以原始退出码 1 失败，并分别报告 top stop
+  偏差 0.0725、bottom stop 偏差 0.34；改为 `[0, 70 / height, 0.5, 1]` 后定向测试通过。加入 HUD
+  visibility 回归后，LyricsXPackage 107 项在 `--no-parallel` 下全部通过、原始退出码 0，随后
+  workspace Debug scheme 使用隔离 DerivedData 构建成功。
 - LyricsKit 全量 test target 目前在进入新测试前被既有
   `GroupProviderTests.StaticProvider` / `FailingProvider` 未遵循当前 `LyricsProvider` protocol 阻断；
   这两个文件不在本次改动中。不要把这次编译失败写成“新测试失败”。
 
+2026-08-30 的底部渐隐视觉校准：
+
+- 回归在 70 point 实现上以原始退出码 1 失败，bottom stop 与 128 point 目标相差 0.0725；顶部 0.5
+  stop 没有变化。修改后定向测试通过。
+- 第一次完整测试聚合运行返回一次没有失败明细的瞬时退出码 1；随后裸输出复跑与再次聚合复跑连续
+  两次通过，均为 107 项、13 个 suite，原始退出码 0。
+- `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功；本次
+  没有启动应用做交互式 UI 验证。
+
+2026-08-30 的对称渐隐与 viewport 留白：
+
+- 两项回归在 128 point 实现上先失败：800 point 测试视口的 bottom stop 与 0.5 对称目标相差 0.34；
+  scroll view 仍占满 `(0, 0, 640, 800)`，与上下各 32 point 的目标 frame 相差 32 point。
+- 改为 `[0, 0.5, 0.5, 1]` 并应用 32 point vertical inset 后，两项定向回归通过；选中 baseline 与单
+  clip bounds spring 的既有回归也继续通过。
+- LyricsXPackage 108 项、13 个 suite 全部通过，原始退出码 0；`MxIris-LyricsX-Project.xcworkspace`
+  的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功。未启动应用做交互式 UI 验证。
+
+2026-08-30 撤销 viewport 硬留白：
+
+- 用户并排截图确认 Apple Music 的 lyrics viewport 仍覆盖完整高度，边缘空间来自渐隐而不是 frame
+  inset。完整高度回归在 32 point 实现上先失败，实际 frame 为 `(0, 32, 640, 736)`，目标为
+  `(0, 0, 640, 800)`。
+- 移除 inset 后，完整高度与对称渐隐两项定向回归通过；LyricsXPackage 108 项、13 个 suite 全部
+  通过，原始退出码 0。真实 row spacing、line blur、行内动画与 display-link 路径均未改变。
+
+2026-08-30 修正 flipped coordinate mapping：
+
+- 同一首歌的并排截图显示，对称 mask 把本项目选中行压到约 78% normalized opacity，而 Apple Music
+  的选中行保持完全不透明；这证明选中行本身错误地落进了 fade。
+- 重新核对 26.6 Swift interface、`sub_1001284F8` 的反编译与汇编后，确认 Music 的 mask target 是
+  flipped 的 `AMPFlippedDocumentView`，non-pretty 自动跟随 locations 仍是
+  `[0, 70 / height, 0.5, 1]`。本项目外层 container 未 flipped，因此最终反转 `startPoint` 与
+  `endPoint`，而不是继续修改 distance。
+- 新回归在对称实现上先以原始退出码 1 失败：800 point 视口的第二个 stop 与 `70 / height` 相差
+  0.4125，gradient vector 的起点和终点也与目标相反。修复后渐隐与完整高度两项定向回归通过；
+  LyricsXPackage 108 项、13 个 suite 全部通过，原始退出码 0；隔离 DerivedData 的 LyricsX workspace
+  Debug build 成功。未启动应用做交互式 UI 验证。
+
 ## 以后重做版本核对时
 
 Apple Music 私有实现会随版本变化。升级验证时应分别核对：word factor 的语言门槛、rise/return delay、
-deglow spring、normal/tap line spring、selected baseline fraction、blur membership 与 cubic curve。
+deglow spring、normal/tap line spring、selected baseline fraction、blur membership、viewport mask 分支、
+mask target 的 flipped 状态与 cubic curve。
 这些值集中在纯 plan 与 `LyricsSpecs`，不要先在 layer 执行代码里散改常数。

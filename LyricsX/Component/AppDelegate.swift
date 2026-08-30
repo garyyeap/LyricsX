@@ -228,16 +228,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
     // MARK: - Menubar Action
 
     @IBAction func showLyricsHUD(_ sender: Any?) {
-        if defaults[.isShowLyricsHUD] {
+        let isWindowVisible = activeLyricsHUD?.window?.isVisible ?? false
+        let presentationAction = LyricsWindowPresentationDecision.action(
+            isWindowVisible: isWindowVisible,
+            isApplicationActive: NSApp.isActive
+        )
+        switch presentationAction {
+        case .show, .bringToFront:
+            if let activeLyricsHUD {
+                activeLyricsHUD.showWindow(nil)
+            } else {
+                openLyricsHUD()
+            }
+            defaults[.isShowLyricsHUD] = true
+            NSApp.activate(ignoringOtherApps: true)
+        case .close:
             activeLyricsHUD?.close()
             activeLyricsHUD = nil
             defaults[.isShowLyricsHUD] = false
-        } else {
-            openLyricsHUD()
-            defaults[.isShowLyricsHUD] = true
         }
-
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     @IBAction func aboutLyricsXAction(_ sender: Any) {

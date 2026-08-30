@@ -1,22 +1,44 @@
 import AppKit
-import CoreGraphics
-import ColorfulX
+import Metal
+import MetalKit
+import QuartzCore
 import UIFoundation
 
 extension AppleMusicLyrics {
-    /// Metal-rendered animated multicolor gradient background (ColorfulX),
-    /// driven by the current artwork's dominant colors. Pure AppKit — no SwiftUI.
     final class GradientBackgroundView: NSView {
-        private let gradientView = AnimatedMulticolorGradientView()
-        private let darkOverlay = LayerBackedView()
-        /// Track identity the current palette was computed for, so colors are
-        /// re-extracted only on track change.
-        private var paletteTrackID: String?
+        private let configuration = ArtworkGradientConfiguration()
+        private let fallbackView = LayerBackedView()
+        private let metalView: ArtworkGradientMetalView?
+        private let paletteExtractionQueue = DispatchQueue(
+            label: "ArtworkGradientPaletteExtraction",
+            qos: .userInitiated,
+            autoreleaseFrequency: .workItem
+        )
+
+        private var requestState = ArtworkGradientRequestState()
+        private var artworkAbsenceWorkItem: DispatchWorkItem?
+        private var windowOcclusionObserver: NSObjectProtocol?
+        private var windowScreenObserver: NSObjectProtocol?
+        private var accessibilityDisplayOptionsObserver: NSObjectProtocol?
+        private var isPresentationVisible = false
+        private var isWindowDragging = false
+        private var isPerformingLiveResize = false
 
         override init(frame frameRect: NSRect) {
+            let metalDevice = MTLCreateSystemDefaultDevice()
+            if let metalDevice {
+                self.metalView = try? ArtworkGradientMetalView(
+                    frame: frameRect,
+                    device: metalDevice,
+                    configuration: configuration
+                )
+            } else {
+                self.metalView = nil
+            }
+
             super.init(frame: frameRect)
-            wantsLayer = true
-            setup()
+            configureViewHierarchy()
+            observeAccessibilityDisplayOptions()
         }
 
         @available(*, unavailable)
@@ -24,227 +46,473 @@ extension AppleMusicLyrics {
             fatalError("init(coder:) has not been implemented")
         }
 
-        /// Purely decorative — pass all clicks through to the draggable root view
-        /// behind it (so dragging the gradient moves the window).
+        deinit {
+            artworkAbsenceWorkItem?.cancel()
+            if let windowOcclusionObserver {
+                NotificationCenter.default.removeObserver(windowOcclusionObserver)
+            }
+            if let windowScreenObserver {
+                NotificationCenter.default.removeObserver(windowScreenObserver)
+            }
+            if let accessibilityDisplayOptionsObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(accessibilityDisplayOptionsObserver)
+            }
+        }
+
+        override var isOpaque: Bool {
+            true
+        }
+
         override func hitTest(_ point: NSPoint) -> NSView? {
             nil
         }
 
-        private func setup() {
-            gradientView.translatesAutoresizingMaskIntoConstraints = false
-            gradientView.speed = 0.55 // slow ambient drift
-            gradientView.noise = 2 // a touch of grain; high noise reads as muddy
-            gradientView.bias = 0.003
-            gradientView.transitionSpeed = 2.0 // spring crossfade on track change
-            gradientView.setColors(ColorfulPreset.aurora, animated: false)
-            addSubview(gradientView)
-
-            // Darken just enough for text contrast (lighter than before so the
-            // vivid artwork palette stays rich).
-            darkOverlay.translatesAutoresizingMaskIntoConstraints = false
-            darkOverlay.backgroundColor = NSColor.black.withAlphaComponent(0.34)
-            addSubview(darkOverlay)
-
-            NSLayoutConstraint.activate([
-                gradientView.topAnchor.constraint(equalTo: topAnchor),
-                gradientView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                gradientView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                gradientView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                darkOverlay.topAnchor.constraint(equalTo: topAnchor),
-                darkOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
-                darkOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
-                darkOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
-            ])
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            replaceWindowObservations()
+            refreshPreferredFramesPerSecond()
+            refreshRenderingState()
         }
 
-        /// Update the palette from the current artwork. Colors are extracted at
-        /// most once per track; ColorfulX spring-crossfades to the new palette.
-        func update(artwork: NSImage?, trackID: String?) {
-            guard trackID != paletteTrackID else { return }
-            paletteTrackID = trackID
-
-            if let artwork, let colors = ArtworkColorExtractor.dominantColors(from: artwork), !colors.isEmpty {
-                gradientView.setColors(colors, animated: true)
-            } else {
-                gradientView.setColors(ColorfulPreset.aurora, animated: true)
-            }
-        }
-    }
-}
-
-// MARK: - Artwork Dominant Color Extraction
-
-/// Extracts a small palette of dominant colors from album artwork via
-/// downsampling + k-means, for driving the ColorfulX gradient.
-enum ArtworkColorExtractor {
-    /// Returns up to `count` vivid dominant colors (ColorfulX renders up to 8
-    /// stops). Raw album-art clusters skew dark and desaturated, which reads as a
-    /// muddy gradient — so each cluster's saturation is boosted and very dark
-    /// colors are lifted, and the palette is ranked by vividness × weight.
-    static func dominantColors(from image: NSImage, sampleDimension: Int = 44, count: Int = 5) -> [NSColor]? {
-        guard let pixels = downsampledPixels(from: image, dimension: sampleDimension), !pixels.isEmpty else {
-            return nil
-        }
-        let clusters = kMeans(pixels: pixels, clusterCount: 8, iterations: 10)
-
-        struct Candidate {
-            let color: NSColor
-            let weight: Int
-            let saturation: CGFloat
-        }
-        let candidates: [Candidate] = clusters.map { cluster in
-            let (hue, saturation, brightness) = rgbToHSB(cluster.center)
-            // Boost saturation to bring out accent hues, but KEEP the artwork's
-            // own brightness (only lift true black) so the dark, moody character
-            // is preserved instead of washing out to a flat mid-gray.
-            let boostedSaturation = min(1, saturation * 1.5 + 0.05)
-            let keptBrightness = min(0.95, max(0.16, brightness))
-            let color = NSColor(hue: hue, saturation: boostedSaturation, brightness: keptBrightness, alpha: 1)
-            return Candidate(color: color, weight: cluster.weight, saturation: boostedSaturation)
+        override func viewDidHide() {
+            super.viewDidHide()
+            refreshRenderingState()
         }
 
-        let minimumAccentWeight = max(1, pixels.count / 50)
-        var pickedIndices: [Int] = []
-
-        // Mood: the most dominant clusters (these carry the dark base tones).
-        for index in candidates.indices.sorted(by: { candidates[$0].weight > candidates[$1].weight }) {
-            if pickedIndices.count >= 3 { break }
-            pickedIndices.append(index)
-        }
-        // Accents: the most saturated clusters with non-trivial coverage, so a
-        // small-but-important warm/cool accent in the artwork still shows up.
-        for index in candidates.indices.sorted(by: { candidates[$0].saturation > candidates[$1].saturation }) {
-            if pickedIndices.count >= count { break }
-            if candidates[index].weight >= minimumAccentWeight, !pickedIndices.contains(index) {
-                pickedIndices.append(index)
-            }
+        override func viewDidUnhide() {
+            super.viewDidUnhide()
+            refreshRenderingState()
         }
 
-        let palette = pickedIndices.map { candidates[$0].color }
-        return palette.isEmpty ? nil : palette
-    }
-
-    private static func rgbToHSB(_ rgb: RGB) -> (hue: CGFloat, saturation: CGFloat, brightness: CGFloat) {
-        let maximum = max(rgb.r, rgb.g, rgb.b)
-        let minimum = min(rgb.r, rgb.g, rgb.b)
-        let delta = maximum - minimum
-        let brightness = maximum
-        let saturation = maximum <= 0 ? 0 : delta / maximum
-        var hue: CGFloat = 0
-        if delta > 0 {
-            if maximum == rgb.r {
-                hue = (rgb.g - rgb.b) / delta
-            } else if maximum == rgb.g {
-                hue = 2 + (rgb.b - rgb.r) / delta
-            } else {
-                hue = 4 + (rgb.r - rgb.g) / delta
-            }
-            hue /= 6
-            if hue < 0 { hue += 1 }
+        override func viewWillStartLiveResize() {
+            super.viewWillStartLiveResize()
+            isPerformingLiveResize = true
+            refreshDrawableResizeSuspension()
+            refreshRenderingState()
         }
-        return (hue, saturation, brightness)
-    }
 
-    private struct RGB {
-        var r: CGFloat
-        var g: CGFloat
-        var b: CGFloat
-    }
-
-    private struct Cluster {
-        var center: RGB
-        var weight: Int
-    }
-
-    /// Render the artwork into a small RGBA8 bitmap and read its pixels.
-    private static func downsampledPixels(from image: NSImage, dimension: Int) -> [RGB]? {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let width = dimension
-        let height = dimension
-        var raw = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: &raw,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        context.interpolationQuality = .medium
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        var pixels: [RGB] = []
-        pixels.reserveCapacity(width * height)
-        for index in stride(from: 0, to: raw.count, by: 4) {
-            let alpha = CGFloat(raw[index + 3]) / 255
-            guard alpha > 0.1 else { continue }
-            pixels.append(RGB(
-                r: CGFloat(raw[index]) / 255,
-                g: CGFloat(raw[index + 1]) / 255,
-                b: CGFloat(raw[index + 2]) / 255
-            ))
+        override func viewDidEndLiveResize() {
+            super.viewDidEndLiveResize()
+            isPerformingLiveResize = false
+            refreshDrawableResizeSuspension()
+            refreshRenderingState()
         }
-        return pixels
-    }
 
-    /// Lightweight k-means over the sampled pixels. Seeds are spread across the
-    /// pixel list so the initial centers are reasonably distinct.
-    private static func kMeans(pixels: [RGB], clusterCount: Int, iterations: Int) -> [Cluster] {
-        let k = min(clusterCount, pixels.count)
-        guard k > 0 else { return [] }
+        func setPresentationVisible(_ isVisible: Bool) {
+            guard isPresentationVisible != isVisible else { return }
+            isPresentationVisible = isVisible
+            refreshRenderingState()
+        }
 
-        var centers: [RGB] = (0 ..< k).map { pixels[$0 * pixels.count / k] }
-        var assignments = [Int](repeating: 0, count: pixels.count)
+        func setWindowDragging(_ isDragging: Bool) {
+            guard isWindowDragging != isDragging else { return }
+            isWindowDragging = isDragging
+            refreshDrawableResizeSuspension()
+            refreshRenderingState()
+        }
 
-        for _ in 0 ..< iterations {
-            // Assign each pixel to its nearest center.
-            for (pixelIndex, pixel) in pixels.enumerated() {
-                var bestDistance = CGFloat.greatestFiniteMagnitude
-                var bestCenter = 0
-                for (centerIndex, center) in centers.enumerated() {
-                    let distance = squaredDistance(pixel, center)
-                    if distance < bestDistance {
-                        bestDistance = distance
-                        bestCenter = centerIndex
-                    }
+        func update(artwork: NSImage?, trackIdentity: String?) {
+            let trackChanged = requestState.observeTrackIdentity(trackIdentity)
+            if trackChanged {
+                artworkAbsenceWorkItem?.cancel()
+                artworkAbsenceWorkItem = nil
+                if trackIdentity == nil {
+                    applyFallbackPalette(animated: true)
+                } else if artwork == nil {
+                    scheduleArtworkAbsenceFallback()
                 }
-                assignments[pixelIndex] = bestCenter
             }
 
-            // Recompute centers as the mean of their assigned pixels.
-            var sums = [RGB](repeating: RGB(r: 0, g: 0, b: 0), count: k)
-            var counts = [Int](repeating: 0, count: k)
-            for (pixelIndex, pixel) in pixels.enumerated() {
-                let cluster = assignments[pixelIndex]
-                sums[cluster].r += pixel.r
-                sums[cluster].g += pixel.g
-                sums[cluster].b += pixel.b
-                counts[cluster] += 1
+            guard let artwork else { return }
+            guard let generation = requestState.beginArtworkRequest() else { return }
+            artworkAbsenceWorkItem?.cancel()
+            artworkAbsenceWorkItem = nil
+
+            guard let coreGraphicsImage = artwork.cgImage(
+                forProposedRect: nil,
+                context: nil,
+                hints: nil
+            ) else {
+                applyFallbackPalette(animated: true)
+                return
             }
-            for clusterIndex in 0 ..< k where counts[clusterIndex] > 0 {
-                let total = CGFloat(counts[clusterIndex])
-                centers[clusterIndex] = RGB(
-                    r: sums[clusterIndex].r / total,
-                    g: sums[clusterIndex].g / total,
-                    b: sums[clusterIndex].b / total
+
+            let configuration = configuration
+            paletteExtractionQueue.async { [weak self] in
+                let extractedColors = ArtworkGradientPaletteExtractor.dominantColors(
+                    from: coreGraphicsImage,
+                    configuration: configuration
+                )
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.requestState.acceptsResult(generation: generation)
+                    else {
+                        return
+                    }
+
+                    let normalizedColors = ArtworkGradientPalette.normalized(
+                        extractedColors ?? [],
+                        colorCount: configuration.paletteColorCount
+                    )
+                    self.applyPalette(normalizedColors, animated: true)
+                }
+            }
+        }
+
+        private func configureViewHierarchy() {
+            fallbackView.translatesAutoresizingMaskIntoConstraints = false
+            fallbackView.backgroundColor = NSColor(
+                red: 0.12,
+                green: 0.15,
+                blue: 0.2,
+                alpha: 1
+            )
+            addSubview(fallbackView)
+
+            var constraints = [
+                fallbackView.topAnchor.constraint(equalTo: topAnchor),
+                fallbackView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                fallbackView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                fallbackView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ]
+
+            if let metalView {
+                metalView.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(metalView)
+                constraints.append(contentsOf: [
+                    metalView.topAnchor.constraint(equalTo: topAnchor),
+                    metalView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                    metalView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    metalView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                ])
+            }
+            NSLayoutConstraint.activate(constraints)
+        }
+
+        private func replaceWindowObservations() {
+            if let windowOcclusionObserver {
+                NotificationCenter.default.removeObserver(windowOcclusionObserver)
+                self.windowOcclusionObserver = nil
+            }
+            if let windowScreenObserver {
+                NotificationCenter.default.removeObserver(windowScreenObserver)
+                self.windowScreenObserver = nil
+            }
+            guard let window else { return }
+
+            windowOcclusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.refreshRenderingState()
+            }
+
+            windowScreenObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.refreshPreferredFramesPerSecond()
+            }
+        }
+
+        private func observeAccessibilityDisplayOptions() {
+            accessibilityDisplayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.refreshRenderingState()
+            }
+        }
+
+        private func refreshRenderingState() {
+            guard let metalView else { return }
+
+            let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
+            let shouldRenderContinuously = ArtworkGradientRenderingPolicy.shouldRenderContinuously(
+                isPresentationVisible: isPresentationVisible,
+                isAttachedToWindow: window != nil,
+                isWindowVisible: window?.isVisible ?? false,
+                isWindowOccluded: isWindowOccluded,
+                isViewHidden: isHiddenOrHasHiddenAncestor,
+                isWindowDragging: isWindowDragging,
+                isLiveResizing: isPerformingLiveResize,
+                shouldReduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            )
+            metalView.setContinuousRenderingEnabled(shouldRenderContinuously)
+            requestSingleFrameIfAppropriate()
+        }
+
+        private func refreshPreferredFramesPerSecond() {
+            let preferredFramesPerSecond = ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
+                screenMaximumFramesPerSecond: window?.screen?.maximumFramesPerSecond
+            )
+            metalView?.setPreferredFramesPerSecond(preferredFramesPerSecond)
+        }
+
+        private func refreshDrawableResizeSuspension() {
+            metalView?.setDrawableResizingSuspended(
+                isWindowDragging || isPerformingLiveResize
+            )
+        }
+
+        private func requestSingleFrameIfAppropriate() {
+            guard let metalView else { return }
+
+            let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
+            let canRenderFrame = ArtworkGradientRenderingPolicy.canRenderFrame(
+                isPresentationVisible: isPresentationVisible,
+                isAttachedToWindow: window != nil,
+                isWindowVisible: window?.isVisible ?? false,
+                isWindowOccluded: isWindowOccluded,
+                isViewHidden: isHiddenOrHasHiddenAncestor,
+                isWindowDragging: isWindowDragging,
+                isLiveResizing: isPerformingLiveResize
+            )
+            if canRenderFrame, metalView.isPaused {
+                metalView.draw()
+            }
+        }
+
+        private func applyPalette(_ colors: [ArtworkGradientColor], animated: Bool) {
+            let shouldAnimate = animated
+                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            metalView?.setPalette(colors, animated: shouldAnimate)
+            requestSingleFrameIfAppropriate()
+        }
+
+        private func applyFallbackPalette(animated: Bool) {
+            let normalizedFallbackColors = ArtworkGradientPalette.normalized(
+                ArtworkGradientPalette.fallback,
+                colorCount: configuration.paletteColorCount
+            )
+            applyPalette(normalizedFallbackColors, animated: animated)
+        }
+
+        private func scheduleArtworkAbsenceFallback() {
+            let generation = requestState.generation
+            let artworkAbsenceWorkItem = DispatchWorkItem { [weak self] in
+                guard let self,
+                      requestState.acceptsResult(generation: generation),
+                      !self.requestState.hasSubmittedArtwork
+                else {
+                    return
+                }
+                applyFallbackPalette(animated: true)
+            }
+            self.artworkAbsenceWorkItem = artworkAbsenceWorkItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + configuration.artworkAbsenceFallbackDelay,
+                execute: artworkAbsenceWorkItem
+            )
+        }
+    }
+
+    private enum ArtworkGradientMetalViewCreationError: Error {
+        case unableToCreateCommandQueue
+        case unavailableVertexFunction
+        case unavailableFragmentFunction
+    }
+
+    private final class ArtworkGradientMetalView: MTKView, MTKViewDelegate {
+        private let configuration: ArtworkGradientConfiguration
+        private let commandQueue: MTLCommandQueue
+        private let renderPipelineState: MTLRenderPipelineState
+        private var animationClock = ArtworkGradientAnimationClock()
+        private var transitionSourceColors: [SIMD4<Float>]
+        private var transitionTargetColors: [SIMD4<Float>]
+        private var transitionStartTime: TimeInterval = 0
+        private var transitionDuration: TimeInterval = 0
+        private var isDrawableResizingSuspended = false
+
+        init(
+            frame frameRect: NSRect,
+            device metalDevice: MTLDevice,
+            configuration: ArtworkGradientConfiguration
+        ) throws {
+            guard let commandQueue = metalDevice.makeCommandQueue() else {
+                throw ArtworkGradientMetalViewCreationError.unableToCreateCommandQueue
+            }
+            let shaderLibrary = try metalDevice.makeDefaultLibrary(bundle: .module)
+            guard let vertexFunction = shaderLibrary.makeFunction(
+                name: "artworkGradientFullScreenVertex"
+            ) else {
+                throw ArtworkGradientMetalViewCreationError.unavailableVertexFunction
+            }
+            guard let fragmentFunction = shaderLibrary.makeFunction(
+                name: "artworkGradientFragment"
+            ) else {
+                throw ArtworkGradientMetalViewCreationError.unavailableFragmentFunction
+            }
+
+            let renderPipelineDescriptor = MTLRenderPipelineDescriptor()
+            renderPipelineDescriptor.label = "Artwork Gradient Pipeline"
+            renderPipelineDescriptor.vertexFunction = vertexFunction
+            renderPipelineDescriptor.fragmentFunction = fragmentFunction
+            renderPipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+
+            self.configuration = configuration
+            self.commandQueue = commandQueue
+            self.renderPipelineState = try metalDevice.makeRenderPipelineState(
+                descriptor: renderPipelineDescriptor
+            )
+            let fallbackColors = ArtworkGradientPalette.normalized(
+                ArtworkGradientPalette.fallback,
+                colorCount: configuration.paletteColorCount
+            ).map(\.linearColorVector)
+            self.transitionSourceColors = fallbackColors
+            self.transitionTargetColors = fallbackColors
+
+            super.init(frame: frameRect, device: metalDevice)
+
+            delegate = self
+            framebufferOnly = true
+            colorPixelFormat = .bgra8Unorm_srgb
+            depthStencilPixelFormat = .invalid
+            sampleCount = 1
+            preferredFramesPerSecond = ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
+                screenMaximumFramesPerSecond: nil
+            )
+            enableSetNeedsDisplay = false
+            autoResizeDrawable = false
+            presentsWithTransaction = false
+            clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.1, alpha: 1)
+            colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+            isPaused = true
+            updateDrawableSize()
+        }
+
+        @available(*, unavailable)
+        required init(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override var isOpaque: Bool {
+            true
+        }
+
+        override func layout() {
+            super.layout()
+            updateDrawableSize()
+        }
+
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            updateDrawableSize()
+        }
+
+        func setContinuousRenderingEnabled(_ isEnabled: Bool) {
+            guard isPaused == isEnabled else { return }
+
+            let currentTimestamp = CACurrentMediaTime()
+            animationClock.setPaused(!isEnabled, timestamp: currentTimestamp)
+            isPaused = !isEnabled
+            if isEnabled {
+                draw()
+            }
+        }
+
+        func setPreferredFramesPerSecond(_ framesPerSecond: Int) {
+            guard preferredFramesPerSecond != framesPerSecond else { return }
+            preferredFramesPerSecond = framesPerSecond
+        }
+
+        func setPalette(_ colors: [ArtworkGradientColor], animated: Bool) {
+            let normalizedColors = ArtworkGradientPalette.normalized(
+                colors,
+                colorCount: configuration.paletteColorCount
+            ).map(\.linearColorVector)
+            let currentAnimationTime = animationClock.elapsedTime(at: CACurrentMediaTime())
+            transitionSourceColors = interpolatedColors(at: currentAnimationTime)
+            transitionTargetColors = normalizedColors
+            transitionStartTime = currentAnimationTime
+            transitionDuration = animated ? configuration.paletteTransitionDuration : 0
+        }
+
+        func setDrawableResizingSuspended(_ isSuspended: Bool) {
+            guard isDrawableResizingSuspended != isSuspended else { return }
+            isDrawableResizingSuspended = isSuspended
+            if !isSuspended {
+                updateDrawableSize()
+            }
+        }
+
+        func draw(in view: MTKView) {
+            guard let renderPassDescriptor = currentRenderPassDescriptor,
+                  let drawable = currentDrawable,
+                  let commandBuffer = commandQueue.makeCommandBuffer(),
+                  let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(
+                      descriptor: renderPassDescriptor
+                  )
+            else {
+                return
+            }
+
+            let currentAnimationTime = animationClock.elapsedTime(at: CACurrentMediaTime())
+            let paletteColors = interpolatedColors(at: currentAnimationTime)
+            let aspectRatio = Float(drawableSize.width / max(1, drawableSize.height))
+            var renderingParameters = SIMD4<Float>(
+                Float(currentAnimationTime),
+                configuration.darkOverlayOpacity,
+                configuration.grainAmount,
+                aspectRatio
+            )
+
+            renderCommandEncoder.label = "Artwork Gradient Render Encoder"
+            renderCommandEncoder.setRenderPipelineState(renderPipelineState)
+            paletteColors.withUnsafeBytes { paletteColorBytes in
+                guard let baseAddress = paletteColorBytes.baseAddress else { return }
+                renderCommandEncoder.setFragmentBytes(
+                    baseAddress,
+                    length: paletteColorBytes.count,
+                    index: 0
                 )
             }
+            renderCommandEncoder.setFragmentBytes(
+                &renderingParameters,
+                length: MemoryLayout<SIMD4<Float>>.stride,
+                index: 1
+            )
+            renderCommandEncoder.drawPrimitives(
+                type: .triangle,
+                vertexStart: 0,
+                vertexCount: 3
+            )
+            renderCommandEncoder.endEncoding()
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
         }
 
-        var weights = [Int](repeating: 0, count: k)
-        for cluster in assignments {
-            weights[cluster] += 1
-        }
-        return (0 ..< k).map { Cluster(center: centers[$0], weight: weights[$0]) }
-    }
+        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
-    private static func squaredDistance(_ lhs: RGB, _ rhs: RGB) -> CGFloat {
-        let deltaR = lhs.r - rhs.r
-        let deltaG = lhs.g - rhs.g
-        let deltaB = lhs.b - rhs.b
-        return deltaR * deltaR + deltaG * deltaG + deltaB * deltaB
+        private func updateDrawableSize() {
+            guard !isDrawableResizingSuspended else { return }
+
+            let nativeBackingBounds = convertToBacking(bounds)
+            let updatedDrawableSize = configuration.drawablePixelSize(
+                forNativeBackingSize: nativeBackingBounds.size
+            )
+            guard drawableSize != updatedDrawableSize else { return }
+            drawableSize = updatedDrawableSize
+            if isPaused {
+                draw()
+            }
+        }
+
+        private func interpolatedColors(at animationTime: TimeInterval) -> [SIMD4<Float>] {
+            guard transitionDuration > 0 else { return transitionTargetColors }
+
+            let transitionProgress = Float(min(
+                1,
+                max(0, (animationTime - transitionStartTime) / transitionDuration)
+            ))
+            return transitionSourceColors.indices.map { colorIndex in
+                let sourceColor = transitionSourceColors[colorIndex]
+                let targetColor = transitionTargetColors[colorIndex]
+                return sourceColor + (targetColor - sourceColor) * transitionProgress
+            }
+        }
     }
 }

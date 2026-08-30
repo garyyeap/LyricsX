@@ -18,3 +18,25 @@ func lyricsHUDWindowJoinsEverySpaceAfterConfiguration() {
     #expect(!window.collectionBehavior.contains(.moveToActiveSpace))
     #expect(window.collectionBehavior == LyricsHUDWindowConfiguration.collectionBehavior)
 }
+
+@Test
+func lyricsWindowToggleUsesActualWindowVisibility() {
+    #expect(
+        LyricsWindowPresentationDecision.action(
+            isWindowVisible: false,
+            isApplicationActive: false
+        ) == .show
+    )
+    #expect(
+        LyricsWindowPresentationDecision.action(
+            isWindowVisible: true,
+            isApplicationActive: false
+        ) == .bringToFront
+    )
+    #expect(
+        LyricsWindowPresentationDecision.action(
+            isWindowVisible: true,
+            isApplicationActive: true
+        ) == .close
+    )
+}

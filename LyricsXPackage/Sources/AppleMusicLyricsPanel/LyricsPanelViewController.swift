@@ -7,7 +7,7 @@ import UIFoundation
 
 extension AppleMusicLyrics {
     /// The full Apple Music-style lyrics panel, in pure AppKit. Hosts the
-    /// ColorfulX Metal gradient background, the album/track/transport chrome,
+    /// low-resolution Metal gradient background, the album/track/transport chrome,
     /// and the CALayer lyrics engine — replacing the previous SwiftUI `RootView`
     /// + `NSHostingController`.
     public final class LyricsPanelViewController: NSViewController {
@@ -86,11 +86,13 @@ extension AppleMusicLyrics {
 
         public override func viewDidAppear() {
             super.viewDidAppear()
+            backgroundView.setPresentationVisible(true)
             startChromeTimer()
         }
 
         public override func viewDidDisappear() {
             super.viewDidDisappear()
+            backgroundView.setPresentationVisible(false)
             chromeTimer?.invalidate()
             chromeTimer = nil
         }
@@ -213,6 +215,11 @@ extension AppleMusicLyrics {
         }
 
         private func wireInteraction() {
+            if let draggablePanelView = view as? DraggablePanelView {
+                draggablePanelView.onWindowDraggingChanged = { [weak self] isDragging in
+                    self?.backgroundView.setWindowDragging(isDragging)
+                }
+            }
             interactionButton.onClick = { [weak self] in self?.interactionState.toggleIsolation() }
             interactionState.onChange = { [weak self] in
                 guard let self else { return }
@@ -329,6 +336,7 @@ extension AppleMusicLyrics {
             if newTrackID != currentTrackID {
                 currentTrackID = newTrackID
                 coverImageView.image = nil
+                backgroundView.update(artwork: nil, trackIdentity: newTrackID)
                 lastArtworkFetchAttempt = .distantPast
             }
             refreshArtwork()
@@ -366,7 +374,7 @@ extension AppleMusicLyrics {
 
         private func applyArtwork(_ artwork: NSImage) {
             coverImageView.image = artwork
-            backgroundView.update(artwork: artwork, trackID: currentTrackID)
+            backgroundView.update(artwork: artwork, trackIdentity: currentTrackID)
         }
 
         private func refreshTrackInfo() {
@@ -407,12 +415,14 @@ extension AppleMusicLyrics {
 
     /// Moving the window via `mouseDragged` keeps the main run loop in its
     /// default mode (unlike `isMovableByWindowBackground`, which spins a nested
-    /// `NSEventTrackingRunLoopMode` loop). That lets ColorfulX's
-    /// `DispatchQueue.main.async`-hopped frames keep draining, so the gradient
-    /// animates during the drag instead of freezing.
+    /// `NSEventTrackingRunLoopMode` loop). Playback and lyric updates can
+    /// therefore keep draining while the window is dragged.
     final class DraggablePanelView: LayerBackedView {
+        var onWindowDraggingChanged: ((Bool) -> Void)?
+
         private var initialMouseScreen: NSPoint?
         private var initialWindowOrigin: NSPoint?
+        private var isDraggingWindow = false
 
         override func setup() {
             backgroundColor = .black
@@ -440,6 +450,7 @@ extension AppleMusicLyrics {
 
         override func mouseDown(with event: NSEvent) {
             guard let window else { return }
+            finishWindowDrag()
             initialMouseScreen = NSEvent.mouseLocation
             initialWindowOrigin = window.frame.origin
         }
@@ -448,16 +459,35 @@ extension AppleMusicLyrics {
             guard let window,
                   let initialMouseScreen,
                   let initialWindowOrigin else { return }
-            let current = NSEvent.mouseLocation
+            if !isDraggingWindow {
+                isDraggingWindow = true
+                onWindowDraggingChanged?(true)
+            }
+            let currentMouseScreen = NSEvent.mouseLocation
             window.setFrameOrigin(NSPoint(
-                x: initialWindowOrigin.x + (current.x - initialMouseScreen.x),
-                y: initialWindowOrigin.y + (current.y - initialMouseScreen.y)
+                x: initialWindowOrigin.x + (currentMouseScreen.x - initialMouseScreen.x),
+                y: initialWindowOrigin.y + (currentMouseScreen.y - initialMouseScreen.y)
             ))
         }
 
         override func mouseUp(with event: NSEvent) {
+            finishWindowDrag()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                finishWindowDrag()
+            }
+        }
+
+        private func finishWindowDrag() {
             initialMouseScreen = nil
             initialWindowOrigin = nil
+            if isDraggingWindow {
+                isDraggingWindow = false
+                onWindowDraggingChanged?(false)
+            }
         }
     }
 

@@ -139,5 +139,10 @@ struct LineEmphasisStructureProbes {
             contentLayer.isGeometryFlipped,
             "the content layer must preserve the y-down coordinates produced by LineTextLayout"
         )
+        let glyphMaskContainer = try #require(contentLayer.mask)
+        #expect(
+            glyphMaskContainer.isGeometryFlipped,
+            "the mask container that positions wrapped words must use the same y-down coordinates"
+        )
     }
 }

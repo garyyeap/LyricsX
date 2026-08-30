@@ -23,6 +23,8 @@
     设置模块架构逐页迁移，最低系统提到 macOS 14。
   - [0007 对齐 Apple Music 26.6 歌词动画](Evolutions/0007-apple-music-lyrics-animation-parity.md)
     —— 保存 Apple Music TTML 的 word/syllable timing，并对齐主歌词的逐字、行间与 blur 动画。
+  - [0008 自绘 Metal 歌词渐变背景](Evolutions/0008-apple-music-metal-gradient.md)
+    —— 用异步封面取色、低分辨率 `MTKView` 和窗口生命周期暂停替换 full-window artwork backdrop。
 
 ## 实现说明
 
@@ -37,8 +39,12 @@
   尺寸，补的约束优先级为什么必须卡在 500 和 750 之间，量的为什么是选中页而不是 controller
   自己的 view，以及切 tab 为什么没有动画（试过的三种写法各自怎么失败的）。
 - [Apple Music 26.6 歌词动画](Internal/AppleMusicLyricsAnimation.md) —— TTML 的 word/syllable timing
-  如何经过 LRCX 保存，行内 factor、clip bounds spring、`.topRelative(40)`、多行坐标与 contextual blur
-  如何落地，以及 AppKit view geometry 和 Core Animation presentation 各自拥有什么状态。
+  如何经过 LRCX 保存，行内 factor、clip bounds spring、`.topRelative(40)`、多行坐标、contextual blur
+  与 viewport edge fade 如何落地，以及 AppKit view geometry 和 Core Animation presentation 各自拥有什么状态。
+- [Apple Music 歌词面板 Metal 渐变背景](Internal/AppleMusicMetalGradient.md) —— palette 提取、package Metal
+  resource、低分辨率 drawable、窗口拖动与遮挡暂停的实现边界。
+- [歌词 HUD 窗口显示与关闭](Internal/LyricsHUDPresentation.md) —— 为什么菜单动作必须读取实际窗口可见性和
+  应用前台状态，以及隐藏、后台和前台三种状态分别如何处理。
 
 ## 术语
 

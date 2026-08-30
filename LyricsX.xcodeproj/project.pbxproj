@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0AF1A0010B0B0B0B0B0B0B02 /* AppleMusicLyricsPanel in Frameworks */ = {isa = PBXBuildFile; productRef = 0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */; };
-		0DB25079533538D85D98A968 /* ColorfulX in Frameworks */ = {isa = PBXBuildFile; productRef = E5E613E102B0FC5E5F71472F /* ColorfulX */; };
 		2184C9F27CF97FD28E82B0A8 /* LyricsXWidgetShared in Frameworks */ = {isa = PBXBuildFile; productRef = 753562E8D796EC165DEE2DEE /* LyricsXWidgetShared */; };
 		BB60F3121E889FCD00BA1FD2 /* LyricsXHelper.app in Copy Helper */ = {isa = PBXBuildFile; fileRef = BB60F3011E889A1B00BA1FD2 /* LyricsXHelper.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BB6C75E8248B908500804AEB /* TouchBarHelper in Frameworks */ = {isa = PBXBuildFile; productRef = BB6C75E7248B908500804AEB /* TouchBarHelper */; };
@@ -154,7 +153,6 @@
 				E9C5763F2DEDF539009107B5 /* LyricsXWidgetShared in Frameworks */,
 				BBB03F2D232FB3AF00A3879E /* GenericID in Frameworks */,
 				E9EF0D532D6F5ECD00D45E0F /* UIFoundationToolbox in Frameworks */,
-				0DB25079533538D85D98A968 /* ColorfulX in Frameworks */,
 				F00DA0010A0A0A0A0A0A0A01 /* MSDisplayLink in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -299,7 +297,6 @@
 				E9C5763C2DEDF539009107B5 /* LyricsXFoundation */,
 				0AF1A0010B0B0B0B0B0B0B01 /* AppleMusicLyricsPanel */,
 				E9C5763E2DEDF539009107B5 /* LyricsXWidgetShared */,
-				E5E613E102B0FC5E5F71472F /* ColorfulX */,
 				F00DA0030A0A0A0A0A0A0A03 /* MSDisplayLink */,
 			);
 			productName = LyricsX;
@@ -418,7 +415,6 @@
 				E983FA222C86302200170CF7 /* XCRemoteSwiftPackageReference "MarqueeLabel" */,
 				E967A20A2D2AD6DB00982E06 /* XCRemoteSwiftPackageReference "LaunchAtLogin-Legacy" */,
 				E9EF0D4F2D6F5ECD00D45E0F /* XCRemoteSwiftPackageReference "UIFoundation" */,
-				802D765F5C210DF8C3D1820E /* XCRemoteSwiftPackageReference "ColorfulX" */,
 				F00DA0020A0A0A0A0A0A0A02 /* XCRemoteSwiftPackageReference "MSDisplayLink" */,
 			);
 			preferredProjectObjectVersion = 54;
@@ -612,14 +608,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		802D765F5C210DF8C3D1820E /* XCRemoteSwiftPackageReference "ColorfulX" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Lakr233/ColorfulX";
-			requirement = {
-				kind = exactVersion;
-				version = 5.6.4;
-			};
-		};
 		BB6C75E6248B908500804AEB /* XCRemoteSwiftPackageReference "TouchBarHelper" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ddddxxx/TouchBarHelper";
@@ -753,11 +741,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BBB03F382331D8A800A3879E /* XCRemoteSwiftPackageReference "SwiftyOpenCC" */;
 			productName = OpenCC;
-		};
-		E5E613E102B0FC5E5F71472F /* ColorfulX */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 802D765F5C210DF8C3D1820E /* XCRemoteSwiftPackageReference "ColorfulX" */;
-			productName = ColorfulX;
 		};
 		E967A20B2D2AD6DB00982E06 /* LaunchAtLogin */ = {
 			isa = XCSwiftPackageProductDependency;

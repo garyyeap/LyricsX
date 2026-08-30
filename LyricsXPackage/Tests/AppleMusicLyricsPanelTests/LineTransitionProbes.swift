@@ -107,6 +107,52 @@ struct LineTransitionProbes {
         #expect(abs(selectedBaselineInViewport - expectedBaselineInViewport) < 1)
     }
 
+    @Test func automaticFollowingMapsAppleMusicFadeOntoTheUnflippedContainer() throws {
+        let (container, window) = Self.makeMountedContainer()
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        container.layoutSubtreeIfNeeded()
+
+        let gradientMask = try #require(
+            container.layer?.mask as? CAGradientLayer,
+            "the lyrics viewport should use Apple Music's outer gradient mask"
+        )
+        let maskColors = try #require(gradientMask.colors as? [CGColor])
+        let maskLocations = try #require(gradientMask.locations)
+        let expectedTopFadeEndLocation = NSNumber(value: 70 / Double(container.bounds.height))
+        let expectedBottomFadeStartLocation = NSNumber(value: 0.5)
+
+        #expect(maskColors.count == 4)
+        #expect(maskColors[0].alpha == 0)
+        #expect(maskColors[1].alpha == 1)
+        #expect(maskColors[2].alpha == 1)
+        #expect(maskColors[3].alpha == 0)
+        #expect(maskLocations.count == 4)
+        #expect(maskLocations[0] == 0)
+        #expect(abs(maskLocations[1].doubleValue - expectedTopFadeEndLocation.doubleValue) < 0.000_001)
+        #expect(abs(maskLocations[2].doubleValue - expectedBottomFadeStartLocation.doubleValue) < 0.000_001)
+        #expect(maskLocations[3] == 1)
+        #expect(gradientMask.startPoint == CGPoint(x: 0.5, y: 1))
+        #expect(gradientMask.endPoint == CGPoint(x: 0.5, y: 0))
+        #expect(gradientMask.frame == container.bounds)
+    }
+
+    @Test func lyricsViewportUsesTheCompleteContainerHeight() throws {
+        let (container, window) = Self.makeMountedContainer()
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        container.layoutSubtreeIfNeeded()
+
+        let scrollView = try Self.scrollView(of: container)
+        #expect(scrollView.frame == container.bounds)
+    }
+
     @Test func repeatingTheSameTargetDoesNotRestartTheClipSpring() throws {
         let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
         let (container, window) = Self.makeMountedContainer()
