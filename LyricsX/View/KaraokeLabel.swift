@@ -59,6 +59,7 @@ class KaraokeLabel: NSTextField {
     private func clearCache() {
         invalidateFrameCache()
         needsLayout = true
+        invalidateIntrinsicContentSize()
         removeProgressAnimation()
     }
 
@@ -129,12 +130,33 @@ class KaraokeLabel: NSTextField {
 //        return ctFrame
 //    }
 
-    private func makeFrame(for attributedString: NSAttributedString) -> CTFrame {
+    private func frameAttributes() -> [CTFrame.AttributeKey: Any] {
         let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
-        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
+        return [.progression: progression.rawValue as NSNumber]
+    }
+
+    private func extraInkInsets() -> NSEdgeInsets {
+        let shadowPad = shadow?.shadowBlurRadius ?? 0
+        var insets = NSEdgeInsets(top: shadowPad, left: shadowPad, bottom: shadowPad, right: shadowPad)
+        if isVertical {
+            let pad = (font?.pointSize ?? 24) * 0.35
+            insets.top += pad
+            insets.bottom += pad
+            insets.left += pad * 0.5
+            insets.right += pad * 0.5
+        }
+        return insets
+    }
+
+    private func makeFrame(for attributedString: NSAttributedString) -> CTFrame {
+        let frameAttr = frameAttributes()
         let framesetter = CTFramesetter.create(attributedString: attributedString)
         let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
-        let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
+        let pathSize = CGSize(
+            width: max(suggestSize.width, bounds.size.width),
+            height: max(suggestSize.height, bounds.size.height)
+        )
+        let path = CGPath(rect: CGRect(origin: .zero, size: pathSize), transform: nil)
         return framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
     }
 
@@ -299,11 +321,14 @@ class KaraokeLabel: NSTextField {
     }
 
     override var intrinsicContentSize: NSSize {
-        let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
-        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
+        let frameAttr = frameAttributes()
         let framesetter = CTFramesetter.create(attributedString: attrString)
         let constraints = CGSize(width: CGFloat.infinity, height: .infinity)
-        return framesetter.suggestFrameSize(constraints: constraints, frameAttributes: frameAttr).size
+        var size = framesetter.suggestFrameSize(constraints: constraints, frameAttributes: frameAttr).size
+        let insets = extraInkInsets()
+        size.width += insets.left + insets.right
+        size.height += insets.top + insets.bottom
+        return size
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -337,21 +362,29 @@ class KaraokeLabel: NSTextField {
     // MARK: - Progress
 
     // TODO: multi-line
-    private lazy var progressLayer: CALayer = {
-        let pLayer = CALayer()
+    private var progressLayer: CALayer?
+
+    private func ensureProgressLayer() -> CALayer {
+        if let progressLayer {
+            return progressLayer
+        }
         wantsLayer = true
-        layer?.addSublayer(pLayer)
-        return pLayer
-    }()
+        let layer = CALayer()
+        self.layer?.addSublayer(layer)
+        progressLayer = layer
+        return layer
+    }
 
     @objc dynamic var progressColor: NSColor? {
         get {
-            return storedProgressColor ?? progressLayer.backgroundColor.flatMap(NSColor.init)
+            return storedProgressColor
         }
         set {
             storedProgressColor = newValue
             _progressFrame = nil
-            progressLayer.backgroundColor = isVertical ? newValue?.cgColor : nil
+            if isVertical {
+                progressLayer?.backgroundColor = newValue?.cgColor
+            }
             needsDisplay = true
         }
     }
@@ -383,6 +416,7 @@ class KaraokeLabel: NSTextField {
         progress: [(TimeInterval, Int)]
     ) {
         horizontalProgress = nil
+        let progressLayer = ensureProgressLayer()
         progressLayer.isHidden = false
         progressLayer.backgroundColor = color.cgColor
         progressLayer.mask = nil
@@ -402,7 +436,7 @@ class KaraokeLabel: NSTextField {
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
         progressLayer.mask = mask
 
-        addInlineProgressAnimation(to: line, progress: progress, progressOffset: 0, isVertical: true)
+        addInlineProgressAnimation(to: line, progress: progress, progressOffset: 0, isVertical: true, on: progressLayer)
     }
 
     private func setHorizontalProgressAnimation(progress: [(TimeInterval, Int)]) {
@@ -421,7 +455,8 @@ class KaraokeLabel: NSTextField {
         to line: CTLine,
         progress: [(TimeInterval, Int)],
         progressOffset: CGFloat,
-        isVertical: Bool
+        isVertical: Bool,
+        on progressLayer: CALayer
     ) {
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
         var map = progress.map { ($0.0, line.offset(charIndex: $0.1).primary + progressOffset) }
@@ -449,6 +484,7 @@ class KaraokeLabel: NSTextField {
             needsDisplay = true
             return
         }
+        guard let progressLayer else { return }
         let pausedTime = progressLayer.convertTime(CACurrentMediaTime(), from: nil)
         progressLayer.speed = 0
         progressLayer.timeOffset = pausedTime
@@ -463,6 +499,7 @@ class KaraokeLabel: NSTextField {
             needsDisplay = true
             return
         }
+        guard let progressLayer else { return }
         let pausedTime = progressLayer.timeOffset
         progressLayer.speed = 1
         progressLayer.timeOffset = 0
@@ -476,6 +513,10 @@ class KaraokeLabel: NSTextField {
         horizontalProgress = nil
         storedProgressColor = nil
         _progressFrame = nil
+        guard let progressLayer else {
+            needsDisplay = true
+            return
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         progressLayer.speed = 1
