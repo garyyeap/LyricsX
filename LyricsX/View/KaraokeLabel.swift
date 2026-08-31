@@ -183,9 +183,12 @@ class KaraokeLabel: NSTextField {
     }
 
     private func progressLineBounds(for line: CTLine, origin: CGPoint) -> (frameBounds: CGRect, xOffset: CGFloat) {
-        var localBounds = line.bounds(options: [.useGlyphPathBounds])
-        if localBounds.isNull {
-            localBounds = line.bounds()
+        var localBounds = line.bounds()
+        if !isVertical {
+            let glyphBounds = line.bounds(options: [.useGlyphPathBounds])
+            if !glyphBounds.isNull {
+                localBounds = glyphBounds
+            }
         }
         let xOffset = -localBounds.origin.x
         var frameBounds = localBounds
@@ -215,8 +218,10 @@ class KaraokeLabel: NSTextField {
     }
 
     private func drawVerticalProgressMask(frame: CTFrame, in context: CGContext, lineBounds: CGRect) {
-        let flippedOrigin = lineBounds.applying(.flip(height: bounds.height)).origin
-        drawCTFrame(frame, in: context, offsetTo: flippedOrigin)
+        // Mask bitmap uses unflipped coordinates; lineBounds is already in layer space.
+        let ori = lineBounds.applying(.flip(height: bounds.height)).origin
+        context.concatenate(.translate(x: -ori.x, y: -ori.y))
+        CTFrameDraw(frame, context)
     }
 
     private func horizontalProgressClipRect(width: CGFloat, lineRect: CGRect) -> CGRect {
