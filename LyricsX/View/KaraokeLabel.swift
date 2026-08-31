@@ -52,6 +52,7 @@ class KaraokeLabel: NSTextField {
     private func invalidateFrameCache() {
         _attrString = nil
         _ctFrame = nil
+        _progressFrame = nil
         needsDisplay = true
     }
 
@@ -62,8 +63,12 @@ class KaraokeLabel: NSTextField {
     }
 
     private var _attrString: NSAttributedString?
+    private var _progressFrame: CTFrame?
     private var romajinAnnotations: [(String, NSRange)] = []
     private var lastLayoutBounds: NSSize = .zero
+    private var hasHorizontalProgress = false
+    private var storedProgressColor: NSColor?
+    private var progressRefreshTimer: Timer?
 
     private var attrString: NSAttributedString {
         if let attrString = _attrString {
@@ -117,6 +122,15 @@ class KaraokeLabel: NSTextField {
 //        return ctFrame
 //    }
 
+    private func makeFrame(for attributedString: NSAttributedString) -> CTFrame {
+        let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
+        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
+        let framesetter = CTFramesetter.create(attributedString: attributedString)
+        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
+        let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
+        return framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
+    }
+
     private func ctFrame(_ dirtyRect: NSRect? = nil) -> CTFrame {
         if let ctFrame = _ctFrame {
             return ctFrame
@@ -124,19 +138,27 @@ class KaraokeLabel: NSTextField {
         if dirtyRect == nil {
             layoutSubtreeIfNeeded()
         }
-        let progression: CTFrameProgression = isVertical ? .rightToLeft : .topToBottom
-        let frameAttr: [CTFrame.AttributeKey: Any] = [.progression: progression.rawValue as NSNumber]
-        let framesetter = CTFramesetter.create(attributedString: attrString)
-        let (suggestSize, fitRange) = framesetter.suggestFrameSize(constraints: bounds.size, frameAttributes: frameAttr)
-        let path = CGPath(rect: CGRect(origin: .zero, size: suggestSize), transform: nil)
-        let ctFrame = framesetter.frame(stringRange: fitRange, path: path, frameAttributes: frameAttr)
+        let ctFrame = makeFrame(for: attrString)
         _ctFrame = ctFrame
         return ctFrame
+    }
+
+    private func progressFrame() -> CTFrame? {
+        guard let color = storedProgressColor ?? progressColor else { return nil }
+        if let progressFrame = _progressFrame {
+            return progressFrame
+        }
+        let colored = NSMutableAttributedString(attributedString: attrString)
+        colored.addAttributes([.foregroundColor: color], range: colored.fullRange)
+        let progressFrame = makeFrame(for: colored)
+        _progressFrame = progressFrame
+        return progressFrame
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         if bounds.size != newSize {
             invalidateFrameCache()
+            refreshHorizontalProgressLayerFrame()
         }
         super.setFrameSize(newSize)
     }
@@ -146,7 +168,18 @@ class KaraokeLabel: NSTextField {
         if lastLayoutBounds != bounds.size {
             lastLayoutBounds = bounds.size
             invalidateFrameCache()
+            refreshHorizontalProgressLayerFrame()
         }
+    }
+
+    private func refreshHorizontalProgressLayerFrame() {
+        guard hasHorizontalProgress else { return }
+        guard let lineRect = horizontalProgressLineRect(from: ctFrame()) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        progressLayer.frame = lineRect
+        CATransaction.commit()
+        needsDisplay = true
     }
 
     private func configureFlippedTextContext(_ context: CGContext) {
@@ -155,19 +188,57 @@ class KaraokeLabel: NSTextField {
         context.scaleBy(x: 1.0, y: -1.0)
     }
 
-    private func drawProgressMask(frame: CTFrame, in context: CGContext, lineBounds: CGRect) {
-        if isVertical {
-            let ori = lineBounds.applying(.flip(height: bounds.height)).origin
-            context.concatenate(.translate(x: -ori.x, y: -ori.y))
-            CTFrameDraw(frame, context)
-            return
-        }
-        configureFlippedTextContext(context)
-        context.translateBy(
-            x: -lineBounds.origin.x,
-            y: -(bounds.height - lineBounds.origin.y - lineBounds.height)
-        )
+    private func drawVerticalProgressMask(frame: CTFrame, in context: CGContext, lineBounds: CGRect) {
+        let ori = lineBounds.applying(.flip(height: bounds.height)).origin
+        context.concatenate(.translate(x: -ori.x, y: -ori.y))
         CTFrameDraw(frame, context)
+    }
+
+    private func horizontalProgressLineRect(from frame: CTFrame) -> CGRect? {
+        guard let line = frame.lines.first,
+              let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
+            return nil
+        }
+        var lineBounds = line.bounds()
+        lineBounds = lineBounds.applying(.translate(x: origin.x, y: origin.y))
+        return lineBounds
+    }
+
+    private func horizontalProgressClipRect(width: CGFloat, lineRect: CGRect) -> CGRect {
+        let clipWidth = min(max(width, 0), lineRect.width)
+        return CGRect(
+            x: lineRect.origin.x,
+            y: lineRect.origin.y,
+            width: clipWidth,
+            height: lineRect.height
+        )
+    }
+
+    private func currentHorizontalProgressWidth() -> CGFloat {
+        guard hasHorizontalProgress else { return 0 }
+        let animatedBounds = progressLayer.presentation()?.bounds ?? progressLayer.bounds
+        return animatedBounds.width
+    }
+
+    private func startProgressRefreshTimer() {
+        stopProgressRefreshTimer()
+        progressRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            if self.progressLayer.animation(forKey: "inlineProgress") == nil, self.progressLayer.speed > 0 {
+                self.stopProgressRefreshTimer()
+                self.needsDisplay = true
+                return
+            }
+            self.needsDisplay = true
+        }
+    }
+
+    private func stopProgressRefreshTimer() {
+        progressRefreshTimer?.invalidate()
+        progressRefreshTimer = nil
     }
 
     override var intrinsicContentSize: NSSize {
@@ -191,10 +262,21 @@ class KaraokeLabel: NSTextField {
 //        image.draw(in: dirtyRect)
         guard let context = NSGraphicsContext.current else { return }
         let cgContext = context.cgContext
+        let frame = ctFrame(dirtyRect)
         configureFlippedTextContext(cgContext)
-        CTFrameDraw(ctFrame(dirtyRect), cgContext)
+        CTFrameDraw(frame, cgContext)
 
-        drawRomajiAnnotations(in: cgContext, frame: ctFrame())
+        if hasHorizontalProgress,
+           let progressFrame = progressFrame(),
+           let lineRect = horizontalProgressLineRect(from: frame),
+           currentHorizontalProgressWidth() > 0 {
+            cgContext.saveGState()
+            cgContext.clip(to: horizontalProgressClipRect(width: currentHorizontalProgressWidth(), lineRect: lineRect))
+            CTFrameDraw(progressFrame, cgContext)
+            cgContext.restoreGState()
+        }
+
+        drawRomajiAnnotations(in: cgContext, frame: frame)
     }
 
     // MARK: - Progress
@@ -209,52 +291,96 @@ class KaraokeLabel: NSTextField {
 
     @objc dynamic var progressColor: NSColor? {
         get {
-            return progressLayer.backgroundColor.flatMap(NSColor.init)
+            return storedProgressColor ?? progressLayer.backgroundColor.flatMap(NSColor.init)
         }
         set {
-            progressLayer.backgroundColor = newValue?.cgColor
+            storedProgressColor = newValue
+            _progressFrame = nil
+            progressLayer.backgroundColor = isVertical ? newValue?.cgColor : nil
+            needsDisplay = true
         }
     }
 
     func setProgressAnimation(color: NSColor, progress: [(TimeInterval, Int)]) {
         removeProgressAnimation()
         layoutSubtreeIfNeeded()
+        storedProgressColor = color
+        _progressFrame = nil
+
         let frame = ctFrame()
         guard let line = frame.lines.first,
               let origin = frame.lineOrigins(range: CFRange(location: 0, length: 1)).first else {
             return
         }
-        var lineBounds = line.bounds()
-        let progressOffset: CGFloat
+
         if isVertical {
-            progressOffset = 0
+            setVerticalProgressAnimation(color: color, frame: frame, line: line, origin: origin, progress: progress)
         } else {
-            let glyphBounds = line.bounds(options: [.useGlyphPathBounds])
-            if !glyphBounds.isNull {
-                lineBounds = glyphBounds
-            }
-            progressOffset = -lineBounds.origin.x
+            setHorizontalProgressAnimation(frame: frame, line: line, origin: origin, progress: progress)
         }
+    }
+
+    private func setVerticalProgressAnimation(
+        color: NSColor,
+        frame: CTFrame,
+        line: CTLine,
+        origin: CGPoint,
+        progress: [(TimeInterval, Int)]
+    ) {
+        hasHorizontalProgress = false
+        progressLayer.isHidden = false
+        progressLayer.backgroundColor = color.cgColor
+        progressLayer.mask = nil
+
+        var lineBounds = line.bounds()
         var transform = CGAffineTransform.translate(x: origin.x, y: origin.y)
-        if isVertical {
-            transform.transform(by: .swap() * .translate(y: -lineBounds.width))
-            transform *= .flip(height: bounds.height)
-        }
+        transform.transform(by: .swap() * .translate(y: -lineBounds.width))
+        transform *= .flip(height: bounds.height)
         lineBounds.apply(t: transform)
 
-        progressLayer.anchorPoint = isVertical ? CGPoint(x: 0.5, y: 0) : CGPoint(x: 0, y: 0.5)
+        progressLayer.anchorPoint = CGPoint(x: 0.5, y: 0)
         progressLayer.frame = lineBounds
-        progressLayer.backgroundColor = color.cgColor
+
         let mask = CALayer()
         mask.frame = progressLayer.bounds
         let img = NSImage(size: progressLayer.bounds.size, flipped: false) { _ in
             let context = NSGraphicsContext.current!.cgContext
-            self.drawProgressMask(frame: frame, in: context, lineBounds: lineBounds)
+            self.drawVerticalProgressMask(frame: frame, in: context, lineBounds: lineBounds)
             return true
         }
         mask.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
         progressLayer.mask = mask
 
+        addInlineProgressAnimation(to: line, progress: progress, progressOffset: 0, isVertical: true)
+    }
+
+    private func setHorizontalProgressAnimation(
+        frame: CTFrame,
+        line: CTLine,
+        origin: CGPoint,
+        progress: [(TimeInterval, Int)]
+    ) {
+        hasHorizontalProgress = true
+        progressLayer.isHidden = true
+        progressLayer.backgroundColor = nil
+        progressLayer.mask = nil
+
+        guard let lineRect = horizontalProgressLineRect(from: frame) else { return }
+
+        progressLayer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressLayer.frame = lineRect
+
+        addInlineProgressAnimation(to: line, progress: progress, progressOffset: 0, isVertical: false)
+        startProgressRefreshTimer()
+        needsDisplay = true
+    }
+
+    private func addInlineProgressAnimation(
+        to line: CTLine,
+        progress: [(TimeInterval, Int)],
+        progressOffset: CGFloat,
+        isVertical: Bool
+    ) {
         guard let index = progress.firstIndex(where: { $0.0 > 0 }) else { return }
         var map = progress.map { ($0.0, line.offset(charIndex: $0.1).primary + progressOffset) }
         if index > 0 {
@@ -275,6 +401,7 @@ class KaraokeLabel: NSTextField {
         let pausedTime = progressLayer.convertTime(CACurrentMediaTime(), from: nil)
         progressLayer.speed = 0
         progressLayer.timeOffset = pausedTime
+        stopProgressRefreshTimer()
     }
 
     func resumeProgressAnimation() {
@@ -284,16 +411,28 @@ class KaraokeLabel: NSTextField {
         progressLayer.beginTime = 0
         let timeSincePause = progressLayer.convertTime(CACurrentMediaTime(), from: nil) - pausedTime
         progressLayer.beginTime = timeSincePause
+        if hasHorizontalProgress {
+            startProgressRefreshTimer()
+            needsDisplay = true
+        }
     }
 
     func removeProgressAnimation() {
+        stopProgressRefreshTimer()
+        hasHorizontalProgress = false
+        storedProgressColor = nil
+        _progressFrame = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         progressLayer.speed = 1
         progressLayer.timeOffset = 0
+        progressLayer.isHidden = false
+        progressLayer.backgroundColor = nil
+        progressLayer.mask = nil
         progressLayer.removeAnimation(forKey: "inlineProgress")
         progressLayer.frame = .zero
         CATransaction.commit()
+        needsDisplay = true
     }
 
     private func drawRomajiAnnotations(in context: CGContext, frame: CTFrame) {
