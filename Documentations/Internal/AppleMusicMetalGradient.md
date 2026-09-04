@@ -2,176 +2,205 @@
 
 > 对应提案：[自绘 Metal 歌词渐变背景](../Evolutions/0008-apple-music-metal-gradient.md)
 >
-> 面向维护者。这里记录 palette、Metal resource、低分辨率 drawable 与窗口生命周期之间的边界。
+> 面向维护者。这里记录最终 artwork texture、Metal Performance Shaders、网格形变与窗口生命周期之间的边界。
 
 ## 一句话
 
-`GradientBackgroundView` 每首歌在后台从 44 × 44 artwork sample 提取五个颜色，然后让 `MTKView` 以原生
-backing size 的 35%、当前屏幕的最高刷新率绘制一个 full-screen triangle。窗口拖动、不可见、完全被遮挡、
-live resize 或 Reduce Motion 时连续渲染暂停，背景只保留最后一帧。
+`GradientBackgroundView` 在后台把 artwork 缩到最长边 300 pixel，上传为 private mipmapped texture；
+`ArtworkGradientMetalView` 使用 `MTKView` 的显示同步循环，在完整 backing resolution 上依次执行 artwork transition、
+`MPSImageGaussianBlur` 和细分网格合成。窗口不可见、拖动、live resize 或 Reduce Motion 时暂停连续绘制。
 
 ## 数据流
 
 ```text
-main thread                           palette queue
-───────────                           ─────────────
-NSImage → CGImage ──────────────────→ 44 × 44 RGBA8
-track identity + generation           nearest-centroid clustering
-       ↑                              mood + accent selection
-       └──────── accepted palette ←── bounded five-color palette
-                         │
-                         ▼
-                source / target colors
-                         │ 80 bytes per frame
-                         ▼
-                   fragment shader
-                         │
-                         ▼
-            0.35-scale opaque drawable
+main thread                  artwork queue                    MTKView display cadence
+───────────                  ─────────────                    ───────────────────────
+NSImage → CGImage ─────────→ longest edge ≤ 300 pixel
+track identity + generation average luminosity
+       ↑                     private mipmapped MTLTexture
+       └── accepted texture ← generation gate ──────────────→ source/destination queue
+                                                                  │
+                                                                  ▼
+                                                       artwork composition pass
+                                                                  │
+                                                                  ▼
+                                                       MPSImageGaussianBlur
+                                                                  │
+                                                                  ▼
+                                                   mesh warp + saturation + scrim
+                                                                  │
+                                                                  ▼
+                                                     full-resolution drawable
 ```
 
-原 artwork 不会成为 Metal texture。封面复杂度只影响一次性的 44 × 44 Core Graphics downsample，不影响每帧
-fragment 工作量，也不会在窗口拖动时重新采样。
+原 artwork 的像素细节只影响一次性的后台预处理。逐帧路径不再执行 palette clustering，也不再为每个输出像素计算五组
+`sin` 色场或程序化 grain。
 
-## Palette 提取
+## Apple Music 26.6 证据边界
 
-`ArtworkGradientPaletteExtractor` 执行轻量 nearest-centroid clustering：
+本实现复刻的是公开可重建的架构，不复制 Apple 的 shader、metallib 或私有类型：
 
-1. 把 `CGImage` 绘制到 44 × 44 sRGB RGBA8 bitmap；
-2. 用均匀分布的初始 centroid 做固定轮数的 assignment / recompute；
-3. 先取覆盖率最大的三个 mood color；
-4. 再取覆盖面积不低于阈值的高 saturation accent；
-5. 调整 saturation，并把 brightness 压进适合白色歌词的范围；
-6. 不足五色时循环已有颜色补齐，完全失败时使用内置 fallback palette。
+- `TSLBackdropMetalView` 继承 `MTKView` 并实现 `MTKViewDelegate`；没有覆盖默认每秒 60 帧
+  （frames per second，FPS）。
+- `setCGImage:` 在后台把 artwork 最长边限制为 300 pixel，计算一次平均 luminosity，再通过 `MTKTextureLoader` 上传。
+- `OffscreenBackdropEncoder` 持有 composition、blurred texture 与 `MPSImageGaussianBlur`。
+- `PinchEncoder` 使用预生成的 5 × 5 base mesh，subdivision level 为 3，最终 pass 处理 saturation 与 scrim。
+- offscreen `imageDownSample` 在该版本初始化为 1，因此输出按完整 drawable pixel size 构建。
+- 支持时使用 `BGR10A2Unorm`，否则回退 `BGRA8Unorm`；Gaussian blur options raw value 为 6，即
+  `.allowReducedPrecision + .disableInternalTiling`，edge mode 为 `.zero`。
+- `draw(in:)` 先编码 offscreen backdrop，再获取 `currentRenderPassDescriptor` 并编码最终 pass；present 发生在 populate
+  完成之后。
 
-提取只在 `ArtworkGradientPaletteExtraction` serial queue 上执行。`NSImage` 转 `CGImage` 仍在 main thread 完成，
-避免从后台访问 AppKit object。
+这些结论分别由 runtime dump 的类型/地址、Interactive Disassembler（IDA）decompile 与 disassembly 交叉确认。具体视觉常量属于本项目重新调校值，
+不宣称逐项等同于 Apple Music。
 
-`ArtworkGradientRequestState` 保证同一 track identity 最多提交一次，并给每次请求分配 generation。completion 回到
-main thread 后必须核对 generation；晚到的上一首歌 palette 直接丢弃。
+## Artwork 预处理
 
-## Metal resource 与 pipeline
+`ArtworkBackdropImageProcessor` 只做两件事：
 
-shader source 位于 `AppleMusicLyricsPanel` target 内，并在 `Package.swift` 中显式登记为 processed resource。
-Xcode 的 Swift Package Manager 集成会把它编译成 target resource bundle 里的默认 Metal library。renderer 必须使用：
+1. 当 artwork 最长边超过 300 pixel 时，按原 aspect ratio 用 sRGB Core Graphics context 下采样；小图保持原尺寸。
+2. 另绘制一张 32 × 32 sample，在 linear-light 空间按 Rec. 709 权重计算平均 luminosity。
 
-```swift
-try metalDevice.makeDefaultLibrary(bundle: .module)
-```
+`MTKTextureLoader` 在同一 serial queue 上创建 texture，固定使用：
 
-不能使用无 bundle 参数的 default library；调用者 app 的 main bundle 不拥有 package shader。
+- sRGB sampling；
+- generated mipmaps；
+- `.private` storage；
+- `.shaderRead` usage；
+- top-left origin。
 
-命令行 `swift test` 当前会把 processed `.metal` 保留为 source resource，而不是生成 `default.metallib`；因此 package
-测试只能验证 Swift 端逻辑，最终 app build 必须通过 Xcode workspace 验证 Metal 编译与 bundle 装配。
+completion 回到 main thread 后必须先通过 `ArtworkGradientRequestState` 的 generation gate。上一首歌晚到的 texture 不能
+进入 transition queue。`NSImage` 转 `CGImage` 仍在 main thread 完成，后台线程不访问 AppKit object。
 
-每个 `ArtworkGradientMetalView` 只创建一次 command queue 和 render pipeline。每帧只有：
+## Metal pipeline
 
-- 一个 current drawable；
-- 一个 render pass；
-- 一个由 `vertex_id` 生成的 full-screen triangle；
-- 五个 `float4` palette color；
-- 一个 `float4` rendering parameter；
-- 一次 present。
+### Artwork composition
 
-没有 vertex buffer、artwork texture、offscreen texture、depth attachment 或 multisampling。`framebufferOnly` 保持
-开启，render target 使用 opaque BGRA sRGB 格式。
+source 与 destination texture 先绘制到与 drawable 相同格式的 offscreen texture。renderer 依次尝试
+`.bgr10a2Unorm` 与 `.bgra8Unorm`，只有 device 能创建 render-target/shader-write texture 且两条 render pipeline 都能建立时
+才采用该格式。vertex shader 计算 aspect-fill、轻微 rotation 和固定 zoom；fragment shader 只做两次 texture sample 与
+crossfade。切歌 transition duration 为 0.5 second，播放中再次到达的新 texture 放进单项 pending queue，当前 transition
+完成后再接续，避免中途跳色。
 
-## 低分辨率 drawable
+### Gaussian blur
 
-`autoResizeDrawable` 必须关闭。view 在 `layout()` 与 `viewDidChangeBackingProperties()` 中计算：
+composition texture 直接交给 `MPSImageGaussianBlur`。sigma 按 drawable diagonal 的 `0.045394707` 计算，只在 drawable
+size 改变时重建 kernel。kernel 使用 `.allowReducedPrecision + .disableInternalTiling` 与 `.zero` edge mode；composition 与
+blurred texture 都使用 `.private` storage，并与 drawable 使用同一非 sRGB format。
 
-```text
-drawable width  = native backing width  × 0.35
-drawable height = native backing height × 0.35
-```
+### Mesh 与最终合成
 
-宽高至少为一个 pixel。0.35 的宽高比例意味着 fragment 总数约为原生 drawable 的 12.25%。渐变只有低频色面，
-交给 compositor 放大不会像文字或图标一样暴露像素边缘。
+`ArtworkBackdropMeshTopology` 从 5 × 5 control points 出发，执行三级均匀细分：
 
-不要改回 `preferredDrawableSize` 或 window backing size，也不要根据 artwork resolution 决定 drawable size；这两种
-写法都会让成本重新随显示器或封面变化。
+- 每个维度 33 个 vertex；
+- 总计 1,089 个 vertex；
+- 6,144 个 `UInt32` index。
 
-`preferredFramesPerSecond` 必须取当前 `window.screen.maximumFramesPerSecond`。view 尚未附着到屏幕时使用 60；
-`NSWindow.didChangeScreenNotification` 到达后重新读取，以支持窗口在 60 Hz 与 120 Hz 屏幕之间移动。不要再次固定成
-30 FPS：这个 `MTKView` 覆盖整个窗口并持续 present，固定 30 会让窗口的可见提交 cadence 和 Xcode 帧率读数都落到
-约 30 Hz，即使 AppKit event handling 本身没有被限速，操作仍会呈现明显的低帧率观感。
+vertex buffer 与 index buffer 只创建一次。运动的 `sin`/`cos` 只在这些 vertex 上执行，fragment shader 只 sample blurred
+texture、提高 saturation，并根据 source/destination 平均 luminosity 插值 black/white scrim。没有逐像素程序化 noise。
 
-## Shader 与颜色过渡
+最终 render target 优先为 `.bgr10a2Unorm`，不支持时为 `.bgra8Unorm`；drawable pixel size 等于
+`convertToBacking(bounds)`，不再使用 0.35 scale。
 
-vertex function 只生成覆盖 viewport 的 triangle。fragment function 根据 elapsed time 得到五个缓慢移动的颜色中心，
-以距离权重混合 palette，再加入很弱的静态 grain 和 black scrim。
+## Frame pacing 与生命周期
 
-Swift 端在 source / target palette 之间做 linear-light interpolation。palette 数组单独作为连续 `float4` 上传，时间、
-scrim、grain 和 aspect ratio 放在另一个 `float4`；不要合并成跨 Swift / Metal 的自定义嵌套 struct，以免 alignment
-或 padding 改动静默破坏颜色。
+连续绘制完全交给 `MTKView`：
 
-切歌不会重建 pipeline 或 drawable。只更新 target palette 与 transition start time。Reduce Motion 开启时立即采用
-target palette，并在 paused renderer 上手动请求一张 frame。
-
-## 生命周期
+- `preferredFramesPerSecond` 最高为 60，即使当前屏幕支持 120 Hz；这与分析版本的 Apple Music 默认值一致。
+- 不创建 `DispatchSourceTimer`，不直接调用 `CAMetalLayer.nextDrawable()`。
+- `MTKViewDelegate.draw(in:)` 先创建 command buffer 并编码 composition/blur，再获取 `currentRenderPassDescriptor` 与
+  `currentDrawable`，最后编码 mesh pass、present 与 commit。
+- 连续绘制从暂停恢复时只修改 `isPaused`，不额外同步调用一次 `draw()`。
+- `autoResizeDrawable` 关闭，由 view layout 显式同步完整 backing size；拖动和 live resize 时冻结 size，结束后一次更新。
 
 `ArtworkGradientRenderingPolicy` 只有在以下条件全部满足时才允许连续渲染：
 
 - view controller 已显示；
-- view 已附着到 window；
-- window `isVisible == true`；
-- window `occlusionState` 包含 `.visible`；
+- view 已附着到可见 window；
+- window occlusion state 包含 `.visible`；
 - view 没有被隐藏；
 - window 不在自定义 drag；
 - view 不在 live resize；
 - Reduce Motion 未开启。
 
-`DraggablePanelView` 在第一次 `mouseDragged` 时通知背景暂停，在 `mouseUp` 时恢复。这里只冻结背景，不恢复
-`isMovableByWindowBackground` 的 nested event tracking loop；歌词与播放状态仍可在 default run-loop mode 更新。
+暂停时 `ArtworkGradientAnimationClock` 同时停止，恢复后不会跳到 wall-clock 的新位置。Reduce Motion 只在 artwork、尺寸或
+状态改变时请求单帧。
 
-renderer 的动画时钟与 `isPaused` 同时停下。恢复时用累计动画时间继续，因此拖动后不会瞬间跳到 wall-clock 对应的
-新位置。window occlusion 变化由 `NSWindow.didChangeOcclusionStateNotification` 触发重新判断。
+## 日志与性能埋点
 
-## 性能边界
+实现继续使用 FrameworkToolbox：
 
-正常显示期间背景按当前屏幕上限执行低分辨率 fragment pass，常见为每秒 60 或 120 次。提高提交 cadence 是为了
-避免全窗口 30 Hz 的交互观感；每帧 fragment 数量仍只有原生 drawable 的 12.25%，并继续受窗口生命周期策略约束。
-以下操作只允许在 artwork 或 layout 变化时发生：
+- `ArtworkBackdropPreparation` 覆盖 downsample、luminosity 与 texture upload。
+- 每个 reporting interval 输出 requested/measured FPS、missed frame、最大 frame gap、drawable size 与各阶段平均/最大值。
+- 超出当前 60 FPS 帧预算时发出 `GradientSlowFrame`，command buffer error 单独记录。
+- `GradientFrameEncode`、drawable acquisition、offscreen/final encoding、submission，以及歌词 display link 的内部 interval
+  默认不生成；只有进程环境变量 `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1` 时才开启。
 
-- `NSImage` 转 `CGImage`；
-- 44 × 44 downsample 与 palette clustering；
-- drawable size 更新；
-- source / target palette 切换。
+不要把逐帧 signpost 改成逐帧可读字符串日志。常规复测只使用状态转换、资源重建、周期汇总、慢帧和异常日志；需要
+阶段级 signpost 时启动单个隔离构建进程并临时设置环境变量。
 
-不要把 palette 提取放进 `draw(in:)`，不要在 shader 中采样原 artwork，也不要从歌词的 display link 主动调用背景
-draw。歌词动画和背景各有自己的节奏与暂停条件。
+## 失败降级
 
-## 失败与降级
+以下任一条件失败时只显示 `LayerBackedView` 的静态 fallback color，不影响歌词与控制：
 
-- Metal device、command queue、shader library 或 pipeline 创建失败：显示内置静态 fallback color，不影响歌词。
-- artwork 无法转换为 `CGImage`：切到 fallback palette。
-- 新曲目暂时没有 artwork：保留上一 palette 1.2 秒，再切到 fallback palette。
-- 异步旧结果晚到：generation gate 静默丢弃。
-- Reduce Motion：停止连续渲染，palette 更新时只绘制一帧。
+- 没有 Metal device；
+- Metal Performance Shaders 不支持当前 device；
+- command queue、pipeline、mesh buffer 或 fallback texture 创建失败；
+- package resource bundle 缺少预期 Metal function。
 
-这里没有可重试的 runtime dependency，因此不建立 renderer retry loop。下一次 view 创建或曲目变化会自然重新走
-相应初始化与 palette 路径。
+暂时缺少 artwork 时保留上一张背景 1.2 second；仍未收到时 transition 到内置 2 × 2 fallback texture。fallback texture
+只用于无 artwork，不恢复已删除的 palette extractor。
 
-## 依赖边界
+## 与原提案的差异
 
-ColorfulX、ColorVector 与 SpringInterpolation 保持从 Swift Package manifest、Xcode project 和 tracked
-`Package.resolved` 移除。实现只使用 AppKit、Core Graphics、Metal 与 MetalKit。
+原提案先后采用过 Core Image 静态 backdrop、低分辨率 palette `MTKView`，以及为了隔离 main thread 而改写的自定义
+`CAMetalLayer + DispatchSourceTimer`。真实日志证明最后一种路径仍会因 drawable backpressure 稳定落到 30 FPS；
+Apple Music 二进制证据也推翻了“不应每帧使用 artwork texture”的前提。
 
-`MSDisplayLink` 必须保留：`AppleMusicLyricsScrollView` 仍直接用它驱动 karaoke update；它与背景无关。
+最终实现因此有意撤销三项旧约束：
+
+- 从 palette uniform 回到 artwork texture；
+- 从 0.35 drawable scale 回到完整 backing resolution；
+- 从自定义 timer 回到 `MTKView` display pacing。
+
+保留下来的部分是 generation gate、窗口生命周期暂停、Reduce Motion、隔离构建以及性能日志。
 
 ## 验证边界
 
-自动化测试覆盖配置、drawable size、generation、palette normalization、真实合成图片取色与 lifecycle policy。
-package / workspace build 负责验证 `.metal` resource 能编译和链接。
+自动化测试覆盖：默认 300 pixel/60 FPS/完整 drawable 配置、5 × 5 三级细分拓扑、aspect-ratio-preserving downsample、
+luminosity 范围、generation gate、窗口生命周期和 `MTKView` 架构断言。
 
-自动化测试不启动窗口，无法评价渐变观感或真实拖动流畅度。最终视觉、窗口拖动和不同显示器 backing scale 仍由
-用户在应用中观察；agent 未获得交互式 UI 授权时不得自行启动应用。
+Swift Package Manager 命令行测试不会把 `.metal` 编译进 `default.metallib`，因此最终必须再使用隔离 DerivedData 构建
+umbrella workspace，并确认四个 function 存在：
 
-## 2026-08-30 自动化验证
+- `artworkBackdropCompositionVertex`
+- `artworkBackdropCompositionFragment`
+- `artworkBackdropMeshVertex`
+- `artworkBackdropFinalFragment`
 
-- `ArtworkGradient` 专项 12 项通过，`swift test` 原始退出码为 0；包含无屏幕回退 60、60 Hz 与 120 Hz 策略检查。
-- 使用本地 sibling dependencies 运行完整 package tests，114 项通过，原始退出码为 0。
-- umbrella workspace 的 LyricsX Debug scheme 使用 `/tmp/codex/DerivedData/LyricsX` 构建成功。
-- 产物 `LyricsXPackage_AppleMusicLyricsPanel.bundle` 内存在 `default.metallib`；二进制包含
-  `artworkGradientFullScreenVertex` 与 `artworkGradientFragment`。
-- 未启动应用、未执行交互式 UI 验证；渐变观感与真实窗口拖动仍由用户确认。
+自动化测试不评价真实观感与 WindowServer cadence。最终 brightness、形变幅度和全屏 60 FPS 仍需用户在实际播放中与
+Apple Music 并排复检；不得用 `xctrace`，需要进程采样时只使用 `sample` 或现有 signpost/log。
+
+### 2026-08-31 当前验证结果
+
+- 歌词面板相关 50 项测试串行执行，`swift test` 原始退出码为 0。
+- 同一个实时行内弹跳探针在与 workspace build 并行时曾因 wall-clock 抖动失败；单独重跑和随后串行执行完整 50 项均通过。
+- umbrella workspace 的 LyricsX Debug scheme 使用隔离 DerivedData 构建，`xcodebuild` 原始退出码为 0。
+- app resource bundle 的 `default.metallib` 已确认包含上述四个 function。
+
+### 2026-08-31 cadence 复检与修订
+
+- 单实例稳定阶段背景周期汇总为 56.5–60 FPS；间歇出现 48–128 ms 的 callback gap，但对应 frame 内 command encoding
+  约 0.17–0.59 ms，说明主要空档发生在 `MTKViewDelegate` callback 之间，而不是 shader encoding 内。
+- 同一时间曾运行隔离 DerivedData 与 Xcode DerivedData 中的两个 `LyricsX-Debug`，并各自产生逐帧 lyrics/gradient
+  signpost；这既干扰 WindowServer cadence，也让统一日志过快淘汰旧消息。
+- 回归测试先在缺少诊断 policy 与 rendering profile 时编译失败，新增的三项测试在实现后通过。随后定向运行 52 项
+  歌词面板测试：51 项通过，一个真实时间行内弹跳探针在并发测试负载下失败；该探针单独重跑原始退出码为 0。
+- umbrella workspace 的 LyricsX Debug scheme 使用隔离 DerivedData 构建，`xcodebuild` 原始退出码为 0；app bundle 的
+  `default.metallib` 仍包含四个预期 function。
+- 隔离构建已作为唯一 LyricsX app 启动，等待打开真实全屏歌词后检查 selected pixel format 与周期 cadence；因此本轮
+  尚不把运行时观感和稳定 60 FPS 标记为已验证。
+- 后续真实复测只运行隔离 DerivedData 中的一个 app；不得使用 `xctrace`，如仍有间歇卡顿，只允许使用 `sample`、
+  Lightweight Logging 汇总或显式开启一次详细 signpost。
+- 完整 package test 仍有既存 `LyricsXWidgetSharedTests.WidgetDataStore` round-trip 失败；本次不把它记录为通过。
+- 隔离构建已启动；截至记录时窗口处于 `occluded=true`，尚未取得真实全屏 cadence，提案因此仍为 `In Progress`。

@@ -16,4 +16,5 @@
 | [0005](0005-keyboard-shortcuts-library-swap.md) | 快捷键库从 MASShortcut 换成 KeyboardShortcuts | Draft |
 | [0006](0006-swiftui-settings.md) | 设置界面迁移到 SwiftUI | Draft |
 | [0007](0007-apple-music-lyrics-animation-parity.md) | 对齐 Apple Music 26.6 歌词动画 | Implemented |
-| [0008](0008-apple-music-metal-gradient.md) | 自绘 Metal 歌词渐变背景 | Implemented |
+| [0008](0008-apple-music-metal-gradient.md) | 自绘 Metal 歌词渐变背景 | In Progress |
+| [draft](draft-apple-music-line-cascade-parity.md) | 行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧 | Implemented |

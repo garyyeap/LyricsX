@@ -1,6 +1,7 @@
 # Apple Music 26.6 歌词动画
 
-> 对应提案：[对齐 Apple Music 26.6 歌词动画](../Evolutions/0007-apple-music-lyrics-animation-parity.md)
+> 对应提案：[对齐 Apple Music 26.6 歌词动画](../Evolutions/0007-apple-music-lyrics-animation-parity.md)、
+> [行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧](../Evolutions/draft-apple-music-line-cascade-parity.md)
 >
 > 面向维护者。这里记录最终数据链、动画状态所有权和降级边界；旧的探索文档保留为历史记录，
 > 不再作为 26.6 行为的实现依据。
@@ -8,8 +9,10 @@
 ## 一句话
 
 主歌词现在走两条明确的数据路径：Apple Music TTML 保留真实的 word/syllable range 与结束时间，
-按 Apple Music 26.6 的 factor、stagger 和 contextual blur 执行动画；行间切换使用用户确认过观感的旧
-SwiftUI cascade。没有结构化数据的其他歌词继续走原来的 phrase 推断，不伪造不存在的层级。
+按 Apple Music 26.6 的 factor、stagger 和 contextual blur 执行动画；行间切换默认走 Apple Music 26.6
+的逐行错峰 cascade，旧的 SwiftUI cascade 保留为可切换的第二档。没有结构化数据的其他歌词继续走原来的
+phrase 推断，不伪造不存在的层级。行 layer 像 Apple Music 一样常开光栅化，这是全屏切行不再掉到 30 FPS
+的前提。
 
 ## 最终数据链
 
@@ -96,6 +99,16 @@ factor = min(wordDuration, 2) - 1
 
 factor 为 0 不代表 glyph 静止：lift 仍然执行，只是 scale 保持 1、glow 保持 0。
 
+这条门槛只对结构化词生效，且可以整档切换。`StructuredEmphasisPolicy` 由隐藏的 defaults 键
+`AppleMusicLyricsStructuredEmphasisPolicy` 选择，`SyncedLyricsLineContentLayer` 在每个词起跳时读取：
+
+- `appleMusic26`（默认）：上面的语言门槛与时长规则，首字额外等待一个 stagger。
+- `fullEmphasis`：结构化词一律 `factor = 1`，首字零延迟，观感与 `.inferred` 路径相同。
+
+`.inferred` 路径不受这个键影响，始终满强度。加这档的原因见提案：本地歌词库两千多首里只有一首带
+`[synchronized-timing]`，用户认可行内动画时看到的是 `.inferred` 观感，之后拿那首中文结构化歌词对比
+时才命中了「只 lift」规则；两档可以并排比较后再定。
+
 ### 调度公式与 layer 层级
 
 `WordEmphasisPlan` 固定 26.6 恢复出的公式：
@@ -105,7 +118,7 @@ scale        = 1 + factor × 0.14
 glowOpacity  = factor × 0.4
 springPeriod = min(wordDuration, 3)
 glyphStagger = min(wordDuration / glyphCount × 0.4, 0.4)
-riseDelay    = glyphStagger × (glyphIndex + 1)
+riseDelay    = glyphStagger × (glyphIndex + 1)      # fullEmphasis 与 .inferred 为 glyphStagger × glyphIndex
 returnDelay  = riseDelay + 2 × wordDuration / glyphCount
 ```
 
@@ -129,24 +142,72 @@ targetY  = max(lineFrame.minY - topInset, 0)
 `mainTextFirstBaselineOffset`。这样定位的是第一条文字 baseline，而不是 row 外框顶部；窗口高度变化时
 会重新计算，不能退回固定点数。
 
-普通自动换行恢复旧 SwiftUI 版本的 cascade，但执行端改为 Core Animation：
+### Apple Music 26.6 实际怎么切行
 
-1. 从 clip 与即将参与动画的 row presentation layer 读取当前可见位置。
+2026-09-04 逐函数核对 `Music.i64` 后，此前「普通切行只动一个 clip bounds spring」的结论被推翻：那是
+翻译 / 音译开关走的 `LinesUpdateResult` 路径（`sub_10015AA20`），不是切行路径。真正的切行链路是
+display link → `SyncedLyricsManager` 选行 → 代理 `animate(to:)`（`sub_1001E6B54`）→ `sub_1001DCBD4`：
+
+- 对每个可见行创建一个 `AnimationDescriptor`，`SyncedLyricsViewController.sub_10015D1B0` 再把每个
+  descriptor 变成一个带 delay 的 `LayerPropertyAnimator`。
+- 曲线是 `LyricsSpecs.lineChangeSpringTimingParametersValues`：`sub_1001D1C28` 默认填
+  mass 1 / stiffness 100 / damping 18，Music 侧不覆盖。阻尼比约 0.9，固有周期约 0.63 秒。
+- delay 是 `specs.lineDelay × 行序号`，从视口顶部往下数。全屏 pretty 模式 `lineDelay = 0.05` 秒，
+  侧栏模式 0.02 秒。往回滚时序号反转且 delay 减半，二进制里的调试字符串叫它 "duration hack"。
+- 动画对象是每行 `NSView` 自己的 frame（`sub_1001DF214` 在 change block 里 `setFrame:`），clip 在整个
+  cascade 期间不动；最后一个 descriptor 的 completion（`sub_1001DF460`）才把 `contentView.bounds` 设到
+  新 offset 并复位各行 frame。
+- 有切行动画在飞时，`displayLinkFired` → `sub_1001D8C08` 直接跳过管理器更新，不选新行；动画结束后
+  一次性追上。不存在第二套高阻尼 spring。
+- 选中态切换用 `custom((0.17, 0), (0.83, 1), 0.28 s)`；blur 半径仍是下文的 0.12 秒曲线。
+
+pretty 模式的 `selectedLinePosition` 是 Music 用自己的 `activeBaseline` 锚点构造的 `.center(rect:)`，
+本项目仍沿用上面校准出的 40% baseline，没有重算。
+
+### 本项目的两档 cascade
+
+`LineCascadeVariant` 由隐藏的 defaults 键 `AppleMusicLyricsCascadeVariant` 选择，
+`SyncedLyricsContainerView` 每次切行时读取，因此 `defaults write` 后下一次切行就生效，不用重启：
+
+| | `appleMusic26`（默认） | `legacySwiftUI` |
+|---|---|---|
+| 参与行 | 与旧视口或新视口相交的全部行，从上到下 | 上方 3 行 + 选中行及下方 5 行 |
+| 曲线 | 每行 spring mass 1 / stiffness 100 / damping 18 | 上方 0.5 秒 ease-in-out；其余 period 0.6 / 阻尼比 0.725 |
+| delay | 0.05 秒 × 序号；回滚时序号反转并减半 | 0.08 秒 × (序号 + 2) |
+| 快速切行 | cascade 未 settle 前不接受新选行，settle 后追上 | 0.4 秒内再次切行改为 period 0.5 / 阻尼比 1 的 clip settle |
+
+两档都由 `LineTransitionCoordinator` 执行，顺序与 Apple Music 相反但视觉等价，而且不违反 AppKit
+layout 对 model frame 的所有权：
+
+1. 从 clip 与参与行的 presentation layer 读取当前可见位置。
 2. 在关闭 implicit actions 的同一个 transaction 中把 `NSClipView.bounds` 提交到新 anchor；row 的
    AppKit model frame 始终不变。
-3. 用完整 clip displacement 反向补偿附近 row 的 presentation 起点，因此提交 scroll model 时画面
+3. 用完整 clip displacement 反向补偿参与行的 presentation 起点，因此提交 scroll model 时画面
    不会瞬移。
-4. 选中行上方最多 3 行以 `0.5` 秒 ease-in-out 归位；选中行及下方最多 6 行使用
-   `period 0.6 / dampingRatio 0.725` 的 spring，每行错开 `0.08` 秒。
-5. 新 cascade 从旧动画的 row presentation position 接续，并以稳定 animation key 替换旧动画；整个
-   过程由 render server 插值，不在 DisplayLink callback 里逐帧改 frame 或触发 layout。
+4. 各行按各自的 delay 归位；新 cascade 从旧动画的 row presentation position 接续，并以稳定
+   animation key 替换旧动画。整个过程由 render server 插值，不在 DisplayLink callback 里逐帧改
+   frame 或触发 layout。
 
-两次高亮变化相隔不足 `0.4` 秒时，不继续叠加 delayed row spring：coordinator 会清掉 cascade，并让
-clip 从当前 presentation origin 走 `period 0.5 / dampingRatio 1` 的无反弹 settle。初始化、离屏和
-非交互大跨度 seek 直接落到模型终点。点击歌词跳转继续使用
-`mass 2 / stiffness 260 / damping 50` 的 interactive clip spring，即使跨度较大也执行。
+`appleMusic26` 的「不接受新选行」由 coordinator 的 `isCascadeInFlight` 表达：最慢一行的 delay 加
+spring 的 `settlingDuration` 到期前，容器把新的 highlight index 存进
+`deferredHighlightedOriginalIndex`，旧行继续 karaoke 直到填满；settle 回调只应用最新一次请求。
+点击歌词、用户滚动和大跨度 seek 都不等待：点击走 `mass 2 / stiffness 260 / damping 50` 的 interactive
+clip spring，用户滚动会取消 cascade 并只更新被推迟的行的 highlight 状态，非交互大跨度 seek 直接
+落到模型终点。初始化和离屏也直接落位。
 
 instrumental dots 仍然居中，并复用 coordinator 的 clip spring，不维护第二套逐帧动画状态。
+
+### 行 layer 光栅化
+
+Apple Music 的 `SyncedLyricsLineLayer.init`（`sub_1001A5294`）设置 `shouldRasterize = true`、
+`rasterizationScale = specs.displayScale`，并永久安装 gaussian blur `CAFilter`；只有 blur 半径动画期间
+（`sub_1001DC498`）临时关掉光栅化。本项目此前从未打开它：blur 动画结束时「恢复」的是 backing layer 默认
+的 false，于是 cascade 每帧都要重新合成每一行的嵌套 mask、词级 shadow 和高斯模糊，全屏时正是 30 FPS
+的来源。现在 `SyncedLyricsLineView` 在 init、进入 window 和 backing 属性变化时把 backing layer 设为
+`shouldRasterize = true`、`rasterizationScale = window.backingScaleFactor`；`isBlurRadiusAnimating`
+为真时关掉，动画结束后固定恢复为 true。`rasterizationScale` 不能省：默认值 1 会把 Retina 文字按半分辨率
+缓存。正在做逐字动画的选中行也光栅化，和 Apple Music 一致；如果实测它每帧重光栅化的开销可见，再单独
+豁免并记入提案决策日志。
 
 ## 多行文本坐标
 
@@ -156,6 +217,16 @@ instrumental dots 仍然居中，并复用 coordinator 的 clip spring，不维�
 
 回归测试使用用户截图中的版权句“（未经著作权人许可，不得翻唱翻录或使用。）”，同时固定两层契约：
 layout 中 visual row 0 的 y 小于 visual row 1，承载这些 frame 的 content layer 保持 y-down。
+
+每个 visual row 还必须保留 Core Text 给出的精确 typographic frame，不能用整段 `contentSize.height`
+除以行数来推算平均行高。后者没有表达各行的 ascent、descent 与 leading，会让渐变在不同字体或混排
+文本中偏离真实 glyph。
+
+`SyncedLyricsLineContentLayer` 不再用一个覆盖整句的 glyph mask 同时裁切所有行。每个 visual row 都有
+独立的 colour container，内部放该行的未唱背景、progress gradient，以及只包含该行 word 的 glyph
+mask。progress gradient 为弹跳和 glow 保留的上下 padding 可以在几何上跨过相邻行，但它只能通过本行
+mask，因此不会提前点亮下一行左侧的短文本。多行 progression 仍按各行宽度累计，只有前一行完整唱完
+后才开始移动下一行 gradient。
 
 ## Contextual blur
 
@@ -225,20 +296,66 @@ row spacing，也没有保留额外 viewport inset。
 后续若直接长期修改 row backing layer 的 geometry，AppKit 下一次 layout 会把它重写，表现通常是
 换行中途突然跳回。不要用 completion 再补 model value，那会同时破坏 hit testing 和连续换行。
 
+## 性能诊断
+
+歌词动画使用 `com.JH.LyricsX.AppleMusicLyricsPanel` subsystem，并把不同边界分到四个 category。实现依赖
+FrameworkToolbox 0.10.0 的 `OSToolbox`，由 `AppleMusicLyricsPanel` target 直接导入，避免依赖其它模块的
+transitive import。
+
+- `LyricsFrame` 每两秒汇总一次 display-link source cadence 与 main queue arrival cadence，同时记录
+  nominal frames per second、两侧漏帧数、最大 frame gap、最大 delivery lateness，以及当前歌词长度与
+  timing entry 数。汇总还包含 `handleDisplayLink()` 的平均与最大执行时间、超过一帧预算的次数；
+  `LyricsPlaybackStateRead`、`LyricsInstrumentalProgressUpdate`、`LyricsKaraokeLineUpdate` 三个嵌套
+  signpost 分别覆盖播放器状态读取、间奏状态更新和当前歌词行更新。source 保持 60、main arrival 出现
+  30 FPS 式空档，但歌词工作耗时仍很低，表示 main thread 在两个歌词 callback 之间被其它工作阻塞；
+  两侧 cadence 一起下降才应继续检查 display scheduling 本身。
+- `LyricsLine` 记录 layout 重建的 visual row、word、glyph 数量，以及 blur radius 的每次目标变化。
+- `InlineKaraoke` 用 signpost 包围每次 sweep update，并在 word emphasis、seek 后状态同步和 reset 时发出
+  event；可用它确认快速歌词是否在同一 frame 批量安排了过多 glyph animation。每条
+  `Word emphasis scheduled` 都带 `timingSource=` 与 `policy=`，从 `scale=` 和 `glowOpacity=` 就能看出
+  这个词走的是哪条路径、哪档策略。
+- `LineTransition` 记录 clip spring、row cascade 的 displacement、参与行数、delay 与 settle 时长，并用
+  signpost 测量 animation scheduling 本身；render server 后续插值不在这个区间内。`Line advance` 带
+  `variant=`，被推迟与追上的切行分别记为 `Line change deferred` 与 `Deferred line change applied`。
+
+可在问题出现后直接读取最近记录，不需要把 profiler 附加到 App：
+
+```bash
+/usr/bin/log show --last 2m --info --debug --signpost --style compact \
+  --predicate 'subsystem == "com.JH.LyricsX.AppleMusicLyricsPanel"'
+```
+
+并排比较两档 cascade 或两档行内策略时，播放中直接改隐藏键即可，下一次切行或下一个词生效：
+
+```bash
+defaults write dev.JH.LyricsX AppleMusicLyricsCascadeVariant legacySwiftUI     # 或 appleMusic26
+defaults write dev.JH.LyricsX AppleMusicLyricsStructuredEmphasisPolicy fullEmphasis   # 或 appleMusic26
+defaults delete dev.JH.LyricsX AppleMusicLyricsCascadeVariant                # 回到默认
+```
+
+Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按默认档处理。
+
+逐帧路径只写低开销 signpost；可读 `#log` 均为低频汇总或状态转换，不能改成每帧字符串日志，否则诊断
+本身会改变 frame pacing。
+
 ## 与提案的差异和已知边界
 
 - 范围仍只有 main vocals；Background Vocals、duet alignment 和 agent transform 未实现。
-- 没有新增开关，新路径直接替换旧动画；非 Apple Music 来源只保留数据 fallback。
+- 0007 没有新增开关；后续提案加了两个隐藏 defaults 键（cascade 两档、结构化行内策略两档），没有
+  设置界面。非 Apple Music 来源只保留数据 fallback。
 - 提案要求精确路径不受 phrase 字段污染。最终代码把统一执行字段命名为
   `emphasisDuration` / `emphasisGlyphCount`：结构化路径填真实 word 值，只有 fallback 才从 phrase 推断。
 - Apple Music 26.6 的精确公式没有最小 spring period；非结构化来源的连续快词因为缺失 word/syllable
   层级，额外使用上述 fallback phrase envelope。它只修正运动曲线，不修改来源 timing，也不进入
   `SynchronizedTextTiming` 路径。
-- 提案最初把选中位置写成 `.top(12)`，二进制消费端复核随后把精确定位修正为
-  `.topRelative(40)`，并表明 Apple Music 的 normal update 由单 clip bounds spring 承担。项目曾完全
-  按这条私有机制实现，但 `mass 1 / stiffness 100 / damping 18` 的超调不足一个像素，用户确认视觉上
-  仍是刚性平移；旧 SwiftUI cascade 反而更接近目标观感。因此当前版本保留 40% baseline anchor，另加
-  presentation-only row cascade。这是项目的视觉校准，不再宣称是 Apple Music 私有 row update 的逐项还原。
+- 提案最初把选中位置写成 `.top(12)`，二进制消费端复核随后把精确定位修正为 `.topRelative(40)`。
+  同一轮复核还得出「Apple Music 的 normal update 由单 clip bounds spring 承担」，项目据此先后尝试
+  `mass 1 / stiffness 100 / damping 18` 与 `period 0.6 / dampingRatio 0.725` 的单 clip spring，实机都被
+  用户确认为接近线性平移。2026-09-04 重新核对证明那条结论错了：Apple Music 本来就是逐行错峰
+  cascade，参数与机制见上文。现在默认档就是它的原值，旧 SwiftUI cascade 保留为第二档；40% baseline
+  anchor 仍是项目的视觉校准，Apple Music pretty 模式实际用 `.center(rect:)` 锚在 `activeBaseline`。
+- 0007 阶段的全屏掉帧被归因于 cascade 本身，后来证明根因是行 layer 从未光栅化；见上文「行 layer
+  光栅化」。
 - 第一版只移植了 LyricsX 内部的 contextual blur，漏掉 Music 外层
   `LyricsXViewController.maskLayer`，导致所有非选中行在 viewport 内同样可见。第一次修正又选中了
   pretty mode 的 128 / 128 point 对称分支；第二张并排截图和汇编复核把 locations 改为 non-pretty
@@ -335,9 +452,73 @@ row spacing，也没有保留额外 viewport inset。
   `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功。
 - 本次没有启动应用做交互式 UI 验证；最终视觉效果仍需在真实歌词播放中与 Apple Music 并排确认。
 
+2026-08-31 隔离自动换行后的行内高亮：
+
+- 使用 4 组新造的中文、英文和中英混排长歌词生成 3–4 个 visual row。旧实现中每行 gradient 直接位于
+  共享的整句 glyph mask 下，测试找不到任何逐行 colour container，以原始退出码 1 失败；这对应了
+  第一行 gradient 的 8 point 上下 padding 提前照亮第二行左侧 glyph 的截图现象。
+- 修复后每个 visual row 都有独立 colour container 与 glyph mask；测试同时校验 mask 只包含本行 word，
+  gradient 的 `position.y` 和 `bounds.height` 来自该行精确 typographic frame。同一组定向回归通过，
+  行内结构与真实时间轴动画探针共 6 项通过。
+- 第一次完整复跑中，既有 wall-clock 探针 `emphasisRipplesAcrossNeighboursInsteadOfFreezingEachGlyph`
+  瞬时报告 glyph 停在顶点 0.75 秒；该探针单独串行复跑通过，随后显式 `--no-parallel` 的完整
+  LyricsXPackage 124 项、17 个 suite 全部通过，原始退出码 0。
+- 逐行 colour container 只覆盖本行 typographic frame 加 emphasis outset，不为三行歌词重复分配三份
+  整句高度的 mask surface。
+- `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功。
+- 本次没有启动应用做交互式 UI 验证；需要在真实播放中确认截图里的版权行不再由第二视觉行提前高亮。
+
+2026-08-31 尝试用单 clip spring 降低全屏行间动画的合成开销：
+
+- 重建后的 Music 26.6 IDA database 显示，两个普通自动播放调用路径都会选择固定 line-change timing，
+  timed-word 歌词也不例外；动态 damping ratio / period 公式属于另一条 descriptor / interaction 路径。
+- 新回归在 9 个 row animation 的 cascade 实现上先以原始退出码 1 失败：期望的 clip bounds spring
+  数量为 1，实际为 0。修复后普通切行只有 1 个欠阻尼 clip spring，所有 row 的 `position.y` animation
+  数量为 0；快速连续切行会从前一个 spring 的 presentation origin 开始高阻尼收敛。
+- 6 项 `LineTransitionProbes` 全部通过；LyricsXPackage 125 项、17 个 suite 在 `--no-parallel` 下全部
+  通过，原始退出码 0。`MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离
+  DerivedData 构建成功，原始退出码 0、0 warning。
+- 本次没有启动应用做交互式 UI 验证；自动化验证固定了动画数量、spring 参数、40% baseline anchor 和
+  中断连续性，真实全屏 frame pacing 仍需播放时确认。该方案随后在 2026-09-01 的实机播放中被用户否决：
+  行间观感接近线性平移，行内动画也被父级整体运动压过。
+
+2026-09-01 恢复 SwiftUI 式行间 cascade：
+
+- 回归在单 clip spring 实现上先以原始退出码 1 失败：普通切行实际有 1 个 clip bounds spring、0 个
+  row `position.y` animation，目标为 0 个 clip spring、9 个 row animation。
+- 恢复后普通切行重新得到 3 个上方 smooth settle 与当前行加下方 5 行 spring，6 个 spring 保持
+  `period 0.6 / dampingRatio 0.725` 和 80 ms stagger；快速切行仍会取消 cascade 并从当前可见 clip
+  origin 高阻尼收敛。
+- 6 项 `LineTransitionProbes` 与 6 项 `LineEmphasisProbes` / `LineEmphasisStructureProbes` 全部通过，
+  原始退出码均为 0。行内 word/glyph timing、glow 与多行分层源码没有改动。
+- LyricsXPackage 125 项、17 个 suite 在 `--no-parallel` 下全部通过，原始退出码 0；
+  `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离 DerivedData 构建成功，原始
+  退出码 0、0 warning。本次没有启动应用做交互式 UI 验证。
+
+2026-09-04 行 layer 光栅化、两档 cascade 与两档结构化行内策略：
+
+- 光栅化回归 `rowLayersRasterizeLikeAppleMusicWithoutBeingAsked` 先在旧实现上以原始退出码 1 失败：进入
+  window 后 `shouldRasterize` 为 false、`rasterizationScale` 为 1.0 而 backing scale 为 2.0。修复后
+  `LineBlurProbes` 2 项通过，blur 动画期间仍会关掉光栅化并在 0.12 秒后恢复。
+- `LineTransitionProbes` 改为按 `LineCascadeVariant` 注入：3 项 Apple Music 变体（与新旧视口相交的全部行
+  都拿到 mass 1 / stiffness 100 / damping 18 的 spring，自上而下每行晚 50 ms；回滚时自下而上每行晚
+  25 ms；cascade 在飞时新选行被推迟，等待「spring settlingDuration + 最慢行 delay」后追上并再次 cascade），
+  3 项 legacy 变体保持原契约（9 个行动画、6 个 spring、80 ms、0.4 秒内改高阻尼 clip settle），点击歌词与
+  viewport mask 两项按两档参数化，共 10 个用例通过。
+- `AnimationPlanTests` 新增 `fullEmphasis` 在 `zh-Hans` / `ja-JP` / `en-US` 下 factor 1 与首字零延迟、两个隐藏
+  defaults 键的默认值与非法值回退；`LineEmphasisStructureProbes` 新增中文结构化词在两档策略下 glow 分别为
+  0 与 0.4、lift 两档都安排的探针。
+- LyricsXPackage 133 项、17 个 suite 在 `--no-parallel` 下全部通过，原始退出码 0；SwiftFormat 修正后复跑
+  同样 133 项通过、退出码 0。`MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 使用隔离
+  DerivedData 冷构建与增量构建都成功，原始退出码 0、0 warning。
+- 本次没有启动应用做交互式 UI 验证。全屏帧率是否恢复 60 FPS，以及两档 cascade、两档行内策略哪一档更接近
+  Apple Music，需要用户播放时按上文的 `defaults write` 切换并排比较；`LineTransition` 与 `InlineKaraoke`
+  日志会写明当时生效的 variant 与 policy。
+
 ## 以后重做版本核对时
 
 Apple Music 私有实现会随版本变化。升级验证时应分别核对：word factor 的语言门槛、rise/return delay、
-deglow spring、normal/tap line spring、selected baseline fraction、blur membership、viewport mask 分支、
-mask target 的 flipped 状态与 cubic curve。
-这些值集中在纯 plan 与 `LyricsSpecs`，不要先在 layer 执行代码里散改常数。
+deglow spring、`lineChangeSpringTimingParametersValues` 与 `lineDelay`（pretty 与侧栏两个值）、回滚时的
+delay 处理、「动画中不选新行」的 tick 门槛、tap line spring、selected baseline fraction、行 layer 的
+rasterize 生命周期、blur membership、viewport mask 分支、mask target 的 flipped 状态与 cubic curve。
+这些值集中在纯 plan、`LyricsSpecs` 与 `AnimationVariants`，不要先在 layer 执行代码里散改常数。
