@@ -1,16 +1,24 @@
 import AppKit
-import Metal
 import MetalKit
-import QuartzCore
+import OSToolbox
 import UIFoundation
 
 extension AppleMusicLyrics {
+    @Loggable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "GradientRenderer"
+    )
+    @Signpostable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "GradientRenderer"
+    )
     final class GradientBackgroundView: NSView {
         private let configuration = ArtworkGradientConfiguration()
         private let fallbackView = LayerBackedView()
         private let metalView: ArtworkGradientMetalView?
-        private let paletteExtractionQueue = DispatchQueue(
-            label: "ArtworkGradientPaletteExtraction",
+        private let textureLoader: MTKTextureLoader?
+        private let artworkPreparationQueue = DispatchQueue(
+            label: "ArtworkBackdropPreparation",
             qos: .userInitiated,
             autoreleaseFrequency: .workItem
         )
@@ -27,12 +35,14 @@ extension AppleMusicLyrics {
         override init(frame frameRect: NSRect) {
             let metalDevice = MTLCreateSystemDefaultDevice()
             if let metalDevice {
+                self.textureLoader = MTKTextureLoader(device: metalDevice)
                 self.metalView = try? ArtworkGradientMetalView(
                     frame: frameRect,
                     device: metalDevice,
                     configuration: configuration
                 )
             } else {
+                self.textureLoader = nil
                 self.metalView = nil
             }
 
@@ -48,14 +58,11 @@ extension AppleMusicLyrics {
 
         deinit {
             artworkAbsenceWorkItem?.cancel()
-            if let windowOcclusionObserver {
-                NotificationCenter.default.removeObserver(windowOcclusionObserver)
-            }
-            if let windowScreenObserver {
-                NotificationCenter.default.removeObserver(windowScreenObserver)
-            }
+            removeWindowObservations()
             if let accessibilityDisplayOptionsObserver {
-                NSWorkspace.shared.notificationCenter.removeObserver(accessibilityDisplayOptionsObserver)
+                NSWorkspace.shared.notificationCenter.removeObserver(
+                    accessibilityDisplayOptionsObserver
+                )
             }
         }
 
@@ -112,407 +119,325 @@ extension AppleMusicLyrics {
         }
 
         func update(artwork: NSImage?, trackIdentity: String?) {
-            let trackChanged = requestState.observeTrackIdentity(trackIdentity)
-            if trackChanged {
-                artworkAbsenceWorkItem?.cancel()
-                artworkAbsenceWorkItem = nil
-                if trackIdentity == nil {
-                    applyFallbackPalette(animated: true)
-                } else if artwork == nil {
-                    scheduleArtworkAbsenceFallback()
-                }
-            }
-
-            guard let artwork else { return }
-            guard let generation = requestState.beginArtworkRequest() else { return }
-            artworkAbsenceWorkItem?.cancel()
-            artworkAbsenceWorkItem = nil
-
-            guard let coreGraphicsImage = artwork.cgImage(
-                forProposedRect: nil,
-                context: nil,
-                hints: nil
-            ) else {
-                applyFallbackPalette(animated: true)
-                return
-            }
-
-            let configuration = configuration
-            paletteExtractionQueue.async { [weak self] in
-                let extractedColors = ArtworkGradientPaletteExtractor.dominantColors(
-                    from: coreGraphicsImage,
-                    configuration: configuration
-                )
-                DispatchQueue.main.async {
-                    guard let self,
-                          self.requestState.acceptsResult(generation: generation)
-                    else {
-                        return
-                    }
-
-                    let normalizedColors = ArtworkGradientPalette.normalized(
-                        extractedColors ?? [],
-                        colorCount: configuration.paletteColorCount
-                    )
-                    self.applyPalette(normalizedColors, animated: true)
-                }
-            }
-        }
-
-        private func configureViewHierarchy() {
-            fallbackView.translatesAutoresizingMaskIntoConstraints = false
-            fallbackView.backgroundColor = NSColor(
-                red: 0.12,
-                green: 0.15,
-                blue: 0.2,
-                alpha: 1
-            )
-            addSubview(fallbackView)
-
-            var constraints = [
-                fallbackView.topAnchor.constraint(equalTo: topAnchor),
-                fallbackView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                fallbackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                fallbackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            ]
-
-            if let metalView {
-                metalView.translatesAutoresizingMaskIntoConstraints = false
-                addSubview(metalView)
-                constraints.append(contentsOf: [
-                    metalView.topAnchor.constraint(equalTo: topAnchor),
-                    metalView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                    metalView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                    metalView.trailingAnchor.constraint(equalTo: trailingAnchor),
-                ])
-            }
-            NSLayoutConstraint.activate(constraints)
-        }
-
-        private func replaceWindowObservations() {
-            if let windowOcclusionObserver {
-                NotificationCenter.default.removeObserver(windowOcclusionObserver)
-                self.windowOcclusionObserver = nil
-            }
-            if let windowScreenObserver {
-                NotificationCenter.default.removeObserver(windowScreenObserver)
-                self.windowScreenObserver = nil
-            }
-            guard let window else { return }
-
-            windowOcclusionObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didChangeOcclusionStateNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                self?.refreshRenderingState()
-            }
-
-            windowScreenObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.didChangeScreenNotification,
-                object: window,
-                queue: .main
-            ) { [weak self] _ in
-                self?.refreshPreferredFramesPerSecond()
-            }
-        }
-
-        private func observeAccessibilityDisplayOptions() {
-            accessibilityDisplayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
-                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                self?.refreshRenderingState()
-            }
-        }
-
-        private func refreshRenderingState() {
-            guard let metalView else { return }
-
-            let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
-            let shouldRenderContinuously = ArtworkGradientRenderingPolicy.shouldRenderContinuously(
-                isPresentationVisible: isPresentationVisible,
-                isAttachedToWindow: window != nil,
-                isWindowVisible: window?.isVisible ?? false,
-                isWindowOccluded: isWindowOccluded,
-                isViewHidden: isHiddenOrHasHiddenAncestor,
-                isWindowDragging: isWindowDragging,
-                isLiveResizing: isPerformingLiveResize,
-                shouldReduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            )
-            metalView.setContinuousRenderingEnabled(shouldRenderContinuously)
-            requestSingleFrameIfAppropriate()
-        }
-
-        private func refreshPreferredFramesPerSecond() {
-            let preferredFramesPerSecond = ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
-                screenMaximumFramesPerSecond: window?.screen?.maximumFramesPerSecond
-            )
-            metalView?.setPreferredFramesPerSecond(preferredFramesPerSecond)
-        }
-
-        private func refreshDrawableResizeSuspension() {
-            metalView?.setDrawableResizingSuspended(
-                isWindowDragging || isPerformingLiveResize
-            )
-        }
-
-        private func requestSingleFrameIfAppropriate() {
-            guard let metalView else { return }
-
-            let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
-            let canRenderFrame = ArtworkGradientRenderingPolicy.canRenderFrame(
-                isPresentationVisible: isPresentationVisible,
-                isAttachedToWindow: window != nil,
-                isWindowVisible: window?.isVisible ?? false,
-                isWindowOccluded: isWindowOccluded,
-                isViewHidden: isHiddenOrHasHiddenAncestor,
-                isWindowDragging: isWindowDragging,
-                isLiveResizing: isPerformingLiveResize
-            )
-            if canRenderFrame, metalView.isPaused {
-                metalView.draw()
-            }
-        }
-
-        private func applyPalette(_ colors: [ArtworkGradientColor], animated: Bool) {
-            let shouldAnimate = animated
-                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            metalView?.setPalette(colors, animated: shouldAnimate)
-            requestSingleFrameIfAppropriate()
-        }
-
-        private func applyFallbackPalette(animated: Bool) {
-            let normalizedFallbackColors = ArtworkGradientPalette.normalized(
-                ArtworkGradientPalette.fallback,
-                colorCount: configuration.paletteColorCount
-            )
-            applyPalette(normalizedFallbackColors, animated: animated)
-        }
-
-        private func scheduleArtworkAbsenceFallback() {
-            let generation = requestState.generation
-            let artworkAbsenceWorkItem = DispatchWorkItem { [weak self] in
-                guard let self,
-                      requestState.acceptsResult(generation: generation),
-                      !self.requestState.hasSubmittedArtwork
-                else {
-                    return
-                }
-                applyFallbackPalette(animated: true)
-            }
-            self.artworkAbsenceWorkItem = artworkAbsenceWorkItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + configuration.artworkAbsenceFallbackDelay,
-                execute: artworkAbsenceWorkItem
-            )
-        }
-    }
-
-    private enum ArtworkGradientMetalViewCreationError: Error {
-        case unableToCreateCommandQueue
-        case unavailableVertexFunction
-        case unavailableFragmentFunction
-    }
-
-    private final class ArtworkGradientMetalView: MTKView, MTKViewDelegate {
-        private let configuration: ArtworkGradientConfiguration
-        private let commandQueue: MTLCommandQueue
-        private let renderPipelineState: MTLRenderPipelineState
-        private var animationClock = ArtworkGradientAnimationClock()
-        private var transitionSourceColors: [SIMD4<Float>]
-        private var transitionTargetColors: [SIMD4<Float>]
-        private var transitionStartTime: TimeInterval = 0
-        private var transitionDuration: TimeInterval = 0
-        private var isDrawableResizingSuspended = false
-
-        init(
-            frame frameRect: NSRect,
-            device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration
-        ) throws {
-            guard let commandQueue = metalDevice.makeCommandQueue() else {
-                throw ArtworkGradientMetalViewCreationError.unableToCreateCommandQueue
-            }
-            let shaderLibrary = try metalDevice.makeDefaultLibrary(bundle: .module)
-            guard let vertexFunction = shaderLibrary.makeFunction(
-                name: "artworkGradientFullScreenVertex"
-            ) else {
-                throw ArtworkGradientMetalViewCreationError.unavailableVertexFunction
-            }
-            guard let fragmentFunction = shaderLibrary.makeFunction(
-                name: "artworkGradientFragment"
-            ) else {
-                throw ArtworkGradientMetalViewCreationError.unavailableFragmentFunction
-            }
-
-            let renderPipelineDescriptor = MTLRenderPipelineDescriptor()
-            renderPipelineDescriptor.label = "Artwork Gradient Pipeline"
-            renderPipelineDescriptor.vertexFunction = vertexFunction
-            renderPipelineDescriptor.fragmentFunction = fragmentFunction
-            renderPipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
-
-            self.configuration = configuration
-            self.commandQueue = commandQueue
-            self.renderPipelineState = try metalDevice.makeRenderPipelineState(
-                descriptor: renderPipelineDescriptor
-            )
-            let fallbackColors = ArtworkGradientPalette.normalized(
-                ArtworkGradientPalette.fallback,
-                colorCount: configuration.paletteColorCount
-            ).map(\.linearColorVector)
-            self.transitionSourceColors = fallbackColors
-            self.transitionTargetColors = fallbackColors
-
-            super.init(frame: frameRect, device: metalDevice)
-
-            delegate = self
-            framebufferOnly = true
-            colorPixelFormat = .bgra8Unorm_srgb
-            depthStencilPixelFormat = .invalid
-            sampleCount = 1
-            preferredFramesPerSecond = ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
-                screenMaximumFramesPerSecond: nil
-            )
-            enableSetNeedsDisplay = false
-            autoResizeDrawable = false
-            presentsWithTransaction = false
-            clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.1, alpha: 1)
-            colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-            isPaused = true
-            updateDrawableSize()
-        }
-
-        @available(*, unavailable)
-        required init(coder: NSCoder) {
-            fatalError("init(coder:) has not been implemented")
-        }
-
-        override var isOpaque: Bool {
-            true
-        }
-
-        override func layout() {
-            super.layout()
-            updateDrawableSize()
-        }
-
-        override func viewDidChangeBackingProperties() {
-            super.viewDidChangeBackingProperties()
-            updateDrawableSize()
-        }
-
-        func setContinuousRenderingEnabled(_ isEnabled: Bool) {
-            guard isPaused == isEnabled else { return }
-
-            let currentTimestamp = CACurrentMediaTime()
-            animationClock.setPaused(!isEnabled, timestamp: currentTimestamp)
-            isPaused = !isEnabled
-            if isEnabled {
-                draw()
-            }
-        }
-
-        func setPreferredFramesPerSecond(_ framesPerSecond: Int) {
-            guard preferredFramesPerSecond != framesPerSecond else { return }
-            preferredFramesPerSecond = framesPerSecond
-        }
-
-        func setPalette(_ colors: [ArtworkGradientColor], animated: Bool) {
-            let normalizedColors = ArtworkGradientPalette.normalized(
-                colors,
-                colorCount: configuration.paletteColorCount
-            ).map(\.linearColorVector)
-            let currentAnimationTime = animationClock.elapsedTime(at: CACurrentMediaTime())
-            transitionSourceColors = interpolatedColors(at: currentAnimationTime)
-            transitionTargetColors = normalizedColors
-            transitionStartTime = currentAnimationTime
-            transitionDuration = animated ? configuration.paletteTransitionDuration : 0
-        }
-
-        func setDrawableResizingSuspended(_ isSuspended: Bool) {
-            guard isDrawableResizingSuspended != isSuspended else { return }
-            isDrawableResizingSuspended = isSuspended
-            if !isSuspended {
-                updateDrawableSize()
-            }
-        }
-
-        func draw(in view: MTKView) {
-            guard let renderPassDescriptor = currentRenderPassDescriptor,
-                  let drawable = currentDrawable,
-                  let commandBuffer = commandQueue.makeCommandBuffer(),
-                  let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(
-                      descriptor: renderPassDescriptor
-                  )
+            handleTrackChange(artwork: artwork, trackIdentity: trackIdentity)
+            guard let artwork,
+                  let generation = requestState.beginArtworkRequest()
             else {
                 return
             }
 
-            let currentAnimationTime = animationClock.elapsedTime(at: CACurrentMediaTime())
-            let paletteColors = interpolatedColors(at: currentAnimationTime)
-            let aspectRatio = Float(drawableSize.width / max(1, drawableSize.height))
-            var renderingParameters = SIMD4<Float>(
-                Float(currentAnimationTime),
-                configuration.darkOverlayOpacity,
-                configuration.grainAmount,
-                aspectRatio
+            artworkAbsenceWorkItem?.cancel()
+            artworkAbsenceWorkItem = nil
+            guard let sourceImage = artwork.cgImage(
+                forProposedRect: nil,
+                context: nil,
+                hints: nil
+            ), let textureLoader else {
+                applyFallbackArtwork(animated: true)
+                return
+            }
+            prepareArtwork(
+                sourceImage,
+                generation: generation,
+                textureLoader: textureLoader
             )
+        }
+    }
+}
 
-            renderCommandEncoder.label = "Artwork Gradient Render Encoder"
-            renderCommandEncoder.setRenderPipelineState(renderPipelineState)
-            paletteColors.withUnsafeBytes { paletteColorBytes in
-                guard let baseAddress = paletteColorBytes.baseAddress else { return }
-                renderCommandEncoder.setFragmentBytes(
-                    baseAddress,
-                    length: paletteColorBytes.count,
-                    index: 0
+extension AppleMusicLyrics.GradientBackgroundView {
+    fileprivate func handleTrackChange(artwork: NSImage?, trackIdentity: String?) {
+        guard requestState.observeTrackIdentity(trackIdentity) else { return }
+
+        let hasTrackIdentity = trackIdentity != nil
+        let hasArtwork = artwork != nil
+        #log(
+            .info,
+            """
+            Gradient track changed hasIdentity=\(hasTrackIdentity, privacy: .public) \
+            hasArtwork=\(hasArtwork, privacy: .public)
+            """
+        )
+        #signpost(
+            .event,
+            "GradientTrackChanged",
+            "hasArtwork=\(hasArtwork, privacy: .public)"
+        )
+
+        artworkAbsenceWorkItem?.cancel()
+        artworkAbsenceWorkItem = nil
+        if trackIdentity == nil {
+            applyFallbackArtwork(animated: true)
+        } else if artwork == nil {
+            scheduleArtworkAbsenceFallback()
+        }
+    }
+
+    fileprivate func prepareArtwork(
+        _ sourceImage: CGImage,
+        generation: UInt64,
+        textureLoader: MTKTextureLoader
+    ) {
+        let maximumArtworkDimension = configuration.maximumArtworkDimension
+        let preparationInterval = #signpost(
+            .begin,
+            "ArtworkBackdropPreparation",
+            "generation=\(generation, privacy: .public)"
+        )
+        artworkPreparationQueue.async { [weak self] in
+            let preparedArtwork = AppleMusicLyrics.ArtworkBackdropImageProcessor.prepare(
+                sourceImage,
+                maximumDimension: maximumArtworkDimension
+            )
+            let preparedTexture = preparedArtwork.flatMap { preparedArtwork in
+                try? textureLoader.newTexture(
+                    cgImage: preparedArtwork.image,
+                    options: Self.artworkTextureLoadingOptions
                 )
             }
-            renderCommandEncoder.setFragmentBytes(
-                &renderingParameters,
-                length: MemoryLayout<SIMD4<Float>>.stride,
-                index: 1
+            let preparationSucceeded = preparedTexture != nil
+            #signpost(
+                .end,
+                preparationInterval,
+                "success=\(preparationSucceeded, privacy: .public)"
             )
-            renderCommandEncoder.drawPrimitives(
-                type: .triangle,
-                vertexStart: 0,
-                vertexCount: 3
-            )
-            renderCommandEncoder.endEncoding()
-            commandBuffer.present(drawable)
-            commandBuffer.commit()
-        }
 
-        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-
-        private func updateDrawableSize() {
-            guard !isDrawableResizingSuspended else { return }
-
-            let nativeBackingBounds = convertToBacking(bounds)
-            let updatedDrawableSize = configuration.drawablePixelSize(
-                forNativeBackingSize: nativeBackingBounds.size
-            )
-            guard drawableSize != updatedDrawableSize else { return }
-            drawableSize = updatedDrawableSize
-            if isPaused {
-                draw()
+            DispatchQueue.main.async {
+                self?.applyPreparedArtwork(
+                    preparedArtwork,
+                    texture: preparedTexture,
+                    generation: generation
+                )
             }
         }
+    }
 
-        private func interpolatedColors(at animationTime: TimeInterval) -> [SIMD4<Float>] {
-            guard transitionDuration > 0 else { return transitionTargetColors }
-
-            let transitionProgress = Float(min(
-                1,
-                max(0, (animationTime - transitionStartTime) / transitionDuration)
-            ))
-            return transitionSourceColors.indices.map { colorIndex in
-                let sourceColor = transitionSourceColors[colorIndex]
-                let targetColor = transitionTargetColors[colorIndex]
-                return sourceColor + (targetColor - sourceColor) * transitionProgress
-            }
+    fileprivate func applyPreparedArtwork(
+        _ preparedArtwork: AppleMusicLyrics.PreparedArtworkBackdrop?,
+        texture: MTLTexture?,
+        generation: UInt64
+    ) {
+        guard requestState.acceptsResult(generation: generation) else { return }
+        guard let preparedArtwork,
+              let texture
+        else {
+            #log(
+                .error,
+                "Artwork backdrop preparation failed generation=\(generation, privacy: .public)"
+            )
+            applyFallbackArtwork(animated: true)
+            return
         }
+
+        let textureWidth = texture.width
+        let textureHeight = texture.height
+        let averageLuminosity = preparedArtwork.averageLuminosity
+        #log(
+            .info,
+            """
+            Artwork backdrop applied generation=\(generation, privacy: .public) \
+            width=\(textureWidth, privacy: .public) \
+            height=\(textureHeight, privacy: .public) \
+            luminosity=\(averageLuminosity, privacy: .public)
+            """
+        )
+        #signpost(
+            .event,
+            "ArtworkBackdropApplied",
+            "width=\(textureWidth, privacy: .public) height=\(textureHeight, privacy: .public)"
+        )
+        metalView?.setArtworkTexture(
+            texture,
+            averageLuminosity: averageLuminosity,
+            animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+        requestSingleFrameIfAppropriate()
+    }
+
+    fileprivate func configureViewHierarchy() {
+        fallbackView.translatesAutoresizingMaskIntoConstraints = false
+        fallbackView.backgroundColor = NSColor(
+            red: 0.12,
+            green: 0.15,
+            blue: 0.2,
+            alpha: 1
+        )
+        addSubview(fallbackView)
+
+        var constraints = [
+            fallbackView.topAnchor.constraint(equalTo: topAnchor),
+            fallbackView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            fallbackView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            fallbackView.trailingAnchor.constraint(equalTo: trailingAnchor),
+        ]
+        if let metalView {
+            metalView.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(metalView)
+            constraints.append(contentsOf: [
+                metalView.topAnchor.constraint(equalTo: topAnchor),
+                metalView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                metalView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                metalView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+        }
+        NSLayoutConstraint.activate(constraints)
+    }
+
+    fileprivate func removeWindowObservations() {
+        if let windowOcclusionObserver {
+            NotificationCenter.default.removeObserver(windowOcclusionObserver)
+            self.windowOcclusionObserver = nil
+        }
+        if let windowScreenObserver {
+            NotificationCenter.default.removeObserver(windowScreenObserver)
+            self.windowScreenObserver = nil
+        }
+    }
+
+    fileprivate func replaceWindowObservations() {
+        removeWindowObservations()
+        guard let window else { return }
+
+        windowOcclusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshRenderingState()
+        }
+        windowScreenObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshPreferredFramesPerSecond()
+        }
+    }
+
+    fileprivate func observeAccessibilityDisplayOptions() {
+        accessibilityDisplayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshRenderingState()
+        }
+    }
+
+    fileprivate func refreshRenderingState() {
+        guard let metalView else { return }
+
+        let isPresentationVisible = self.isPresentationVisible
+        let isWindowDragging = self.isWindowDragging
+        let isPerformingLiveResize = self.isPerformingLiveResize
+        let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
+        let isAttachedToWindow = window != nil
+        let isWindowVisible = window?.isVisible ?? false
+        let isViewHidden = isHiddenOrHasHiddenAncestor
+        let shouldReduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let canRenderFrame = AppleMusicLyrics.ArtworkGradientRenderingPolicy.canRenderFrame(
+            isPresentationVisible: isPresentationVisible,
+            isAttachedToWindow: isAttachedToWindow,
+            isWindowVisible: isWindowVisible,
+            isWindowOccluded: isWindowOccluded,
+            isViewHidden: isViewHidden,
+            isWindowDragging: isWindowDragging,
+            isLiveResizing: isPerformingLiveResize
+        )
+        let shouldRenderContinuously = AppleMusicLyrics.ArtworkGradientRenderingPolicy.shouldRenderContinuously(
+            isPresentationVisible: isPresentationVisible,
+            isAttachedToWindow: isAttachedToWindow,
+            isWindowVisible: isWindowVisible,
+            isWindowOccluded: isWindowOccluded,
+            isViewHidden: isViewHidden,
+            isWindowDragging: isWindowDragging,
+            isLiveResizing: isPerformingLiveResize,
+            shouldReduceMotion: shouldReduceMotion
+        )
+
+        #log(
+            .info,
+            """
+            Gradient rendering state continuous=\(shouldRenderContinuously, privacy: .public) \
+            allowed=\(canRenderFrame, privacy: .public) \
+            presentationVisible=\(isPresentationVisible, privacy: .public) \
+            windowVisible=\(isWindowVisible, privacy: .public) \
+            occluded=\(isWindowOccluded, privacy: .public) \
+            windowDragging=\(isWindowDragging, privacy: .public) \
+            liveResizing=\(isPerformingLiveResize, privacy: .public) \
+            reduceMotion=\(shouldReduceMotion, privacy: .public)
+            """
+        )
+        metalView.setRenderingState(
+            isFrameRenderingAllowed: canRenderFrame,
+            isContinuousRenderingEnabled: shouldRenderContinuously
+        )
+        requestSingleFrameIfAppropriate()
+    }
+
+    fileprivate func refreshPreferredFramesPerSecond() {
+        let preferredFramesPerSecond = AppleMusicLyrics.ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
+            screenMaximumFramesPerSecond: window?.screen?.maximumFramesPerSecond
+        )
+        metalView?.setPreferredFramesPerSecond(preferredFramesPerSecond)
+    }
+
+    fileprivate func refreshDrawableResizeSuspension() {
+        metalView?.setDrawableResizingSuspended(
+            isWindowDragging || isPerformingLiveResize
+        )
+    }
+
+    fileprivate func requestSingleFrameIfAppropriate() {
+        guard let metalView else { return }
+        let isWindowOccluded = !(window?.occlusionState.contains(.visible) ?? false)
+        let canRenderFrame = AppleMusicLyrics.ArtworkGradientRenderingPolicy.canRenderFrame(
+            isPresentationVisible: isPresentationVisible,
+            isAttachedToWindow: window != nil,
+            isWindowVisible: window?.isVisible ?? false,
+            isWindowOccluded: isWindowOccluded,
+            isViewHidden: isHiddenOrHasHiddenAncestor,
+            isWindowDragging: isWindowDragging,
+            isLiveResizing: isPerformingLiveResize
+        )
+        if canRenderFrame {
+            metalView.requestSingleFrame()
+        }
+    }
+
+    fileprivate func applyFallbackArtwork(animated: Bool) {
+        metalView?.setFallbackArtwork(
+            animated: animated
+                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        )
+        requestSingleFrameIfAppropriate()
+    }
+
+    fileprivate func scheduleArtworkAbsenceFallback() {
+        let generation = requestState.generation
+        let artworkAbsenceWorkItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.requestState.acceptsResult(generation: generation),
+                  !self.requestState.hasSubmittedArtwork
+            else {
+                return
+            }
+            self.applyFallbackArtwork(animated: true)
+        }
+        self.artworkAbsenceWorkItem = artworkAbsenceWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + configuration.artworkAbsenceFallbackDelay,
+            execute: artworkAbsenceWorkItem
+        )
+    }
+
+    fileprivate static var artworkTextureLoadingOptions: [MTKTextureLoader.Option: Any] {
+        [
+            .SRGB: true,
+            .generateMipmaps: true,
+            .origin: MTKTextureLoader.Origin.topLeft,
+            .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
+            .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
+        ]
     }
 }

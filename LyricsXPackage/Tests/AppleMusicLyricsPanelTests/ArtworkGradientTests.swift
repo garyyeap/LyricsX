@@ -1,5 +1,7 @@
 import CoreGraphics
 import Foundation
+import MetalKit
+import MetalPerformanceShaders
 import Testing
 @testable import AppleMusicLyricsPanel
 
@@ -7,23 +9,21 @@ struct ArtworkGradientConfigurationTests {
     @Test func defaultsKeepRenderingWorkBounded() {
         let configuration = AppleMusicLyrics.ArtworkGradientConfiguration()
 
-        #expect(configuration.paletteColorCount == 5)
-        #expect(configuration.sampleDimension == 44)
-        #expect(configuration.clusteringCentroidCount == 8)
-        #expect(configuration.clusteringIterationCount == 10)
-        #expect(configuration.drawableScale == 0.35)
-        #expect(configuration.darkOverlayOpacity == 0.3)
-        #expect(configuration.paletteTransitionDuration == 1.2)
+        #expect(configuration.maximumArtworkDimension == 300)
+        #expect(configuration.drawableScale == 1)
+        #expect(configuration.artworkTransitionDuration == 0.5)
+        #expect(configuration.baseMeshControlPointCount == 5)
+        #expect(configuration.meshSubdivisionLevel == 3)
     }
 
-    @Test func drawableSizeUsesARestrictedFractionOfNativeBackingPixels() {
+    @Test func drawableSizeUsesTheFullNativeBackingSize() {
         let configuration = AppleMusicLyrics.ArtworkGradientConfiguration()
 
         let drawablePixelSize = configuration.drawablePixelSize(
             forNativeBackingSize: CGSize(width: 2000, height: 1200)
         )
 
-        #expect(drawablePixelSize == CGSize(width: 700, height: 420))
+        #expect(drawablePixelSize == CGSize(width: 2000, height: 1200))
     }
 
     @Test func drawableSizeNeverCreatesAZeroSizedMetalTexture() {
@@ -34,6 +34,18 @@ struct ArtworkGradientConfigurationTests {
         )
 
         #expect(drawablePixelSize == CGSize(width: 1, height: 1))
+    }
+
+    @Test func meshTopologyMatchesTheAppleMusicShapedSubdivision() {
+        let configuration = AppleMusicLyrics.ArtworkGradientConfiguration()
+        let meshTopology = AppleMusicLyrics.ArtworkBackdropMeshTopology(
+            baseControlPointCount: configuration.baseMeshControlPointCount,
+            subdivisionLevel: configuration.meshSubdivisionLevel
+        )
+
+        #expect(meshTopology.vertexCountPerDimension == 33)
+        #expect(meshTopology.vertexCount == 1_089)
+        #expect(meshTopology.indexCount == 6_144)
     }
 }
 
@@ -59,7 +71,7 @@ struct ArtworkGradientRequestStateTests {
         #expect(requestState.acceptsResult(generation: secondGeneration))
     }
 
-    @Test func repeatedTrackIdentityDoesNotInvalidateTheCurrentPalette() {
+    @Test func repeatedTrackIdentityDoesNotInvalidateTheCurrentTexture() {
         var requestState = AppleMusicLyrics.ArtworkGradientRequestState()
 
         let observedInitialTrack = requestState.observeTrackIdentity("same-track")
@@ -70,56 +82,20 @@ struct ArtworkGradientRequestStateTests {
     }
 }
 
-struct ArtworkGradientPaletteTests {
-    @Test func normalizationAlwaysProducesTheShaderColorCount() {
-        let sourceColors = [
-            AppleMusicLyrics.ArtworkGradientColor(red: 0.8, green: 0.2, blue: 0.1),
-            AppleMusicLyrics.ArtworkGradientColor(red: 0.1, green: 0.3, blue: 0.8),
-        ]
-
-        let normalizedColors = AppleMusicLyrics.ArtworkGradientPalette.normalized(
-            sourceColors,
-            colorCount: 5
-        )
-
-        #expect(normalizedColors.count == 5)
-        #expect(normalizedColors[0] == sourceColors[0])
-        #expect(normalizedColors[1] == sourceColors[1])
-        #expect(normalizedColors[2] == sourceColors[0])
-    }
-
-    @Test func emptyExtractionUsesTheBuiltInFallbackPalette() {
-        let normalizedColors = AppleMusicLyrics.ArtworkGradientPalette.normalized(
-            [],
-            colorCount: 5
-        )
-
-        #expect(normalizedColors == AppleMusicLyrics.ArtworkGradientPalette.fallback)
-    }
-
-    @Test func splitColorArtworkRetainsBothDominantColorFamilies() throws {
+struct ArtworkBackdropImageProcessorTests {
+    @Test func artworkPreparationPreservesAspectRatioAndBoundsTheLongestEdge() throws {
         let coreGraphicsImage = try #require(Self.makeSplitColorArtworkImage())
 
-        let extractedColors = try #require(
-            AppleMusicLyrics.ArtworkGradientPaletteExtractor.dominantColors(
-                from: coreGraphicsImage
+        let preparedArtwork = try #require(
+            AppleMusicLyrics.ArtworkBackdropImageProcessor.prepare(
+                coreGraphicsImage,
+                maximumDimension: 300
             )
         )
 
-        #expect(!extractedColors.isEmpty)
-        #expect(extractedColors.count <= 5)
-        #expect(extractedColors.contains { color in
-            color.red > color.green && color.red > color.blue
-        })
-        #expect(extractedColors.contains { color in
-            color.blue > color.red && color.blue > color.green
-        })
-        #expect(extractedColors.allSatisfy { color in
-            (0 ... 1).contains(color.red)
-                && (0 ... 1).contains(color.green)
-                && (0 ... 1).contains(color.blue)
-                && color.alpha == 1
-        })
+        #expect(preparedArtwork.image.width == 300)
+        #expect(preparedArtwork.image.height == 150)
+        #expect((0 ... 1).contains(preparedArtwork.averageLuminosity))
     }
 
     private static func makeSplitColorArtworkImage() -> CGImage? {
@@ -188,7 +164,7 @@ struct ArtworkGradientRenderingPolicyTests {
         #expect(
             AppleMusicLyrics.ArtworkGradientRenderingPolicy.preferredFramesPerSecond(
                 screenMaximumFramesPerSecond: 120
-            ) == 120
+            ) == 60
         )
     }
 
@@ -239,6 +215,31 @@ struct ArtworkGradientRenderingPolicyTests {
         )
 
         #expect(!shouldRenderContinuously)
+    }
+}
+
+struct ArtworkRenderingArchitectureTests {
+    @Test
+    func continuousRendererUsesMetalKitDisplayPacing() {
+        let renderingViewType: Any.Type = AppleMusicLyrics.ArtworkGradientMetalView.self
+
+        #expect(renderingViewType is MTKView.Type)
+    }
+
+    @Test
+    func renderingProfilePrefersAppleMusicPixelFormatsAndBlurBehavior() {
+        #expect(
+            AppleMusicLyrics.ArtworkBackdropRenderingProfile.preferredDrawablePixelFormats
+                == [.bgr10a2Unorm, .bgra8Unorm]
+        )
+        #expect(
+            AppleMusicLyrics.ArtworkBackdropRenderingProfile.gaussianBlurOptions
+                == [.allowReducedPrecision, .disableInternalTiling]
+        )
+        #expect(
+            AppleMusicLyrics.ArtworkBackdropRenderingProfile.gaussianBlurEdgeMode
+                == .zero
+        )
     }
 }
 

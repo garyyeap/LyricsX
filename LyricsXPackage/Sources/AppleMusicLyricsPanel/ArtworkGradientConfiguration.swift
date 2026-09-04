@@ -2,84 +2,43 @@ import CoreGraphics
 import Foundation
 
 extension AppleMusicLyrics {
-    struct ArtworkGradientColor: Equatable, Sendable {
-        let red: Float
-        let green: Float
-        let blue: Float
-        let alpha: Float
-
-        init(red: Float, green: Float, blue: Float, alpha: Float = 1) {
-            self.red = red
-            self.green = green
-            self.blue = blue
-            self.alpha = alpha
-        }
-
-        var linearColorVector: SIMD4<Float> {
-            SIMD4(
-                Self.linearComponent(fromStandardRedGreenBlueComponent: red),
-                Self.linearComponent(fromStandardRedGreenBlueComponent: green),
-                Self.linearComponent(fromStandardRedGreenBlueComponent: blue),
-                alpha
-            )
-        }
-
-        private static func linearComponent(fromStandardRedGreenBlueComponent component: Float) -> Float {
-            if component <= 0.04045 {
-                return component / 12.92
-            }
-            return pow((component + 0.055) / 1.055, 2.4)
-        }
-    }
-
     struct ArtworkGradientConfiguration: Sendable {
-        let paletteColorCount: Int
-        let sampleDimension: Int
-        let clusteringCentroidCount: Int
-        let clusteringIterationCount: Int
-        let saturationMultiplier: CGFloat
-        let saturationOffset: CGFloat
-        let brightnessMultiplier: CGFloat
-        let brightnessOffset: CGFloat
-        let minimumBrightness: CGFloat
-        let maximumBrightness: CGFloat
+        let maximumArtworkDimension: Int
         let drawableScale: CGFloat
-        let darkOverlayOpacity: Float
-        let grainAmount: Float
-        let paletteTransitionDuration: TimeInterval
+        let artworkTransitionDuration: TimeInterval
         let artworkAbsenceFallbackDelay: TimeInterval
+        let baseMeshControlPointCount: Int
+        let meshSubdivisionLevel: Int
+        let blurSigmaFraction: Float
+        let saturation: Float
+        let minimumBlackScrimOpacity: Float
+        let maximumBlackScrimOpacity: Float
+        let maximumWhiteScrimOpacity: Float
 
         init(
-            sampleDimension: Int = 44,
-            clusteringCentroidCount: Int = 8,
-            clusteringIterationCount: Int = 10,
-            saturationMultiplier: CGFloat = 1.35,
-            saturationOffset: CGFloat = 0.05,
-            brightnessMultiplier: CGFloat = 0.72,
-            brightnessOffset: CGFloat = 0.08,
-            minimumBrightness: CGFloat = 0.24,
-            maximumBrightness: CGFloat = 0.72,
-            drawableScale: CGFloat = 0.35,
-            darkOverlayOpacity: Float = 0.3,
-            grainAmount: Float = 0.008,
-            paletteTransitionDuration: TimeInterval = 1.2,
-            artworkAbsenceFallbackDelay: TimeInterval = 1.2
+            maximumArtworkDimension: Int = 300,
+            drawableScale: CGFloat = 1,
+            artworkTransitionDuration: TimeInterval = 0.5,
+            artworkAbsenceFallbackDelay: TimeInterval = 1.2,
+            baseMeshControlPointCount: Int = 5,
+            meshSubdivisionLevel: Int = 3,
+            blurSigmaFraction: Float = 0.045394707,
+            saturation: Float = 2,
+            minimumBlackScrimOpacity: Float = 0.08,
+            maximumBlackScrimOpacity: Float = 0.22,
+            maximumWhiteScrimOpacity: Float = 0.08
         ) {
-            self.paletteColorCount = 5
-            self.sampleDimension = sampleDimension
-            self.clusteringCentroidCount = clusteringCentroidCount
-            self.clusteringIterationCount = clusteringIterationCount
-            self.saturationMultiplier = saturationMultiplier
-            self.saturationOffset = saturationOffset
-            self.brightnessMultiplier = brightnessMultiplier
-            self.brightnessOffset = brightnessOffset
-            self.minimumBrightness = minimumBrightness
-            self.maximumBrightness = maximumBrightness
+            self.maximumArtworkDimension = maximumArtworkDimension
             self.drawableScale = drawableScale
-            self.darkOverlayOpacity = darkOverlayOpacity
-            self.grainAmount = grainAmount
-            self.paletteTransitionDuration = paletteTransitionDuration
+            self.artworkTransitionDuration = artworkTransitionDuration
             self.artworkAbsenceFallbackDelay = artworkAbsenceFallbackDelay
+            self.baseMeshControlPointCount = baseMeshControlPointCount
+            self.meshSubdivisionLevel = meshSubdivisionLevel
+            self.blurSigmaFraction = blurSigmaFraction
+            self.saturation = saturation
+            self.minimumBlackScrimOpacity = minimumBlackScrimOpacity
+            self.maximumBlackScrimOpacity = maximumBlackScrimOpacity
+            self.maximumWhiteScrimOpacity = maximumWhiteScrimOpacity
         }
 
         func drawablePixelSize(forNativeBackingSize nativeBackingSize: CGSize) -> CGSize {
@@ -94,36 +53,6 @@ extension AppleMusicLyrics {
                 width: max(1, (nativeBackingSize.width * drawableScale).rounded()),
                 height: max(1, (nativeBackingSize.height * drawableScale).rounded())
             )
-        }
-    }
-
-    enum ArtworkGradientPalette {
-        static let fallback = [
-            ArtworkGradientColor(red: 0.22, green: 0.52, blue: 0.57),
-            ArtworkGradientColor(red: 0.25, green: 0.37, blue: 0.66),
-            ArtworkGradientColor(red: 0.49, green: 0.31, blue: 0.62),
-            ArtworkGradientColor(red: 0.23, green: 0.57, blue: 0.47),
-            ArtworkGradientColor(red: 0.62, green: 0.39, blue: 0.32),
-        ]
-
-        static func normalized(
-            _ colors: [ArtworkGradientColor],
-            colorCount: Int,
-            fallbackColors: [ArtworkGradientColor] = fallback
-        ) -> [ArtworkGradientColor] {
-            guard colorCount > 0 else { return [] }
-
-            let availableColors: [ArtworkGradientColor] = if colors.isEmpty {
-                fallbackColors.isEmpty
-                    ? [ArtworkGradientColor(red: 0.18, green: 0.2, blue: 0.24)]
-                    : fallbackColors
-            } else {
-                colors
-            }
-
-            return (0 ..< colorCount).map { colorIndex in
-                availableColors[colorIndex % availableColors.count]
-            }
         }
     }
 
@@ -167,7 +96,7 @@ extension AppleMusicLyrics {
                 return 60
             }
 
-            return screenMaximumFramesPerSecond
+            return min(60, screenMaximumFramesPerSecond)
         }
 
         static func canRenderFrame(

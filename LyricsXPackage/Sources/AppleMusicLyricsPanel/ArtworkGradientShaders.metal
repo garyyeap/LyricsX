@@ -1,73 +1,163 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct ArtworkGradientVertexOutput {
+struct ArtworkCompositionVertexOutput {
     float4 position [[position]];
-    float2 normalizedPosition;
+    float2 sourceTextureCoordinate;
+    float2 destinationTextureCoordinate;
 };
 
-constant float2 artworkGradientClipSpacePositions[3] = {
+struct ArtworkBackdropMeshVertex {
+    float2 clipSpacePosition;
+    float2 textureCoordinate;
+};
+
+struct ArtworkBackdropMeshVertexOutput {
+    float4 position [[position]];
+    float2 textureCoordinate;
+};
+
+constant float2 artworkBackdropClipSpacePositions[3] = {
     float2(-1.0, -1.0),
     float2(3.0, -1.0),
     float2(-1.0, 3.0),
 };
 
-constant float artworkGradientHorizontalPhases[5] = { 0.2, 1.7, 3.3, 4.8, 5.9 };
-constant float artworkGradientVerticalPhases[5] = { 2.4, 4.1, 0.8, 5.3, 1.5 };
-constant float artworkGradientMotionSpeeds[5] = { 0.071, 0.053, 0.061, 0.047, 0.057 };
-
-vertex ArtworkGradientVertexOutput artworkGradientFullScreenVertex(
-    uint vertexIdentifier [[vertex_id]]
+float2 artworkBackdropAspectFilledTextureCoordinate(
+    float2 textureCoordinate,
+    float textureAspectRatio,
+    float viewportAspectRatio,
+    float rotationSine,
+    float rotationCosine,
+    float zoomScale
 ) {
-    ArtworkGradientVertexOutput output;
-    float2 clipSpacePosition = artworkGradientClipSpacePositions[vertexIdentifier];
+    float2 centeredTextureCoordinate = textureCoordinate - 0.5;
+    if (textureAspectRatio > viewportAspectRatio) {
+        centeredTextureCoordinate.x *= viewportAspectRatio / textureAspectRatio;
+    } else {
+        centeredTextureCoordinate.y *= textureAspectRatio / viewportAspectRatio;
+    }
+    centeredTextureCoordinate *= zoomScale;
+    centeredTextureCoordinate = float2(
+        centeredTextureCoordinate.x * rotationCosine
+            - centeredTextureCoordinate.y * rotationSine,
+        centeredTextureCoordinate.x * rotationSine
+            + centeredTextureCoordinate.y * rotationCosine
+    );
+    return centeredTextureCoordinate + 0.5;
+}
+
+vertex ArtworkCompositionVertexOutput artworkBackdropCompositionVertex(
+    uint vertexIdentifier [[vertex_id]],
+    constant float4 &aspectAndTransitionParameters [[buffer(0)]],
+    constant float4 &rotationParameters [[buffer(1)]]
+) {
+    float2 clipSpacePosition = artworkBackdropClipSpacePositions[vertexIdentifier];
+    float2 textureCoordinate = clipSpacePosition * 0.5 + 0.5;
+    textureCoordinate.y = 1.0 - textureCoordinate.y;
+    float sourceTextureAspectRatio = aspectAndTransitionParameters.x;
+    float destinationTextureAspectRatio = aspectAndTransitionParameters.y;
+    float viewportAspectRatio = aspectAndTransitionParameters.z;
+    float rotationSine = rotationParameters.x;
+    float rotationCosine = rotationParameters.y;
+    float zoomScale = rotationParameters.z;
+
+    ArtworkCompositionVertexOutput output;
     output.position = float4(clipSpacePosition, 0.0, 1.0);
-    output.normalizedPosition = clipSpacePosition * 0.5 + 0.5;
+    output.sourceTextureCoordinate = artworkBackdropAspectFilledTextureCoordinate(
+        textureCoordinate,
+        sourceTextureAspectRatio,
+        viewportAspectRatio,
+        rotationSine,
+        rotationCosine,
+        zoomScale
+    );
+    output.destinationTextureCoordinate = artworkBackdropAspectFilledTextureCoordinate(
+        textureCoordinate,
+        destinationTextureAspectRatio,
+        viewportAspectRatio,
+        -rotationSine,
+        rotationCosine,
+        zoomScale
+    );
     return output;
 }
 
-fragment float4 artworkGradientFragment(
-    ArtworkGradientVertexOutput input [[stage_in]],
-    constant float4 *paletteColors [[buffer(0)]],
-    constant float4 &renderingParameters [[buffer(1)]]
+fragment float4 artworkBackdropCompositionFragment(
+    ArtworkCompositionVertexOutput input [[stage_in]],
+    texture2d<float> sourceTexture [[texture(0)]],
+    texture2d<float> destinationTexture [[texture(1)]],
+    constant float4 &aspectAndTransitionParameters [[buffer(0)]]
 ) {
-    float elapsedTime = renderingParameters.x;
-    float darkOverlayOpacity = renderingParameters.y;
-    float grainAmount = renderingParameters.z;
-    float aspectRatio = max(0.1, renderingParameters.w);
-    float2 normalizedPosition = input.normalizedPosition;
-    float3 weightedColor = float3(0.0);
-    float3 averageColor = float3(0.0);
-    float totalInfluence = 0.0;
+    constexpr sampler artworkSampler(
+        address::clamp_to_edge,
+        filter::linear,
+        mip_filter::linear
+    );
+    float4 sourceColor = sourceTexture.sample(
+        artworkSampler,
+        input.sourceTextureCoordinate
+    );
+    float4 destinationColor = destinationTexture.sample(
+        artworkSampler,
+        input.destinationTextureCoordinate
+    );
+    return mix(
+        sourceColor,
+        destinationColor,
+        clamp(aspectAndTransitionParameters.w, 0.0, 1.0)
+    );
+}
 
-    for (uint colorIndex = 0; colorIndex < 5; ++colorIndex) {
-        float movementTime = elapsedTime * artworkGradientMotionSpeeds[colorIndex];
-        float2 colorCenter = float2(
-            0.5 + 0.43 * sin(movementTime + artworkGradientHorizontalPhases[colorIndex]),
-            0.5 + 0.43 * sin(movementTime * 0.83 + artworkGradientVerticalPhases[colorIndex])
-        );
-        float2 positionDifference = normalizedPosition - colorCenter;
-        positionDifference.x *= aspectRatio;
-        float colorRadius = 0.42
-            + 0.07 * sin(movementTime * 0.71 + artworkGradientHorizontalPhases[colorIndex]);
-        float normalizedDistanceSquared = dot(positionDifference, positionDifference)
-            / max(0.04, colorRadius * colorRadius);
-        float influence = 1.0
-            / (0.16 + normalizedDistanceSquared * normalizedDistanceSquared);
+vertex ArtworkBackdropMeshVertexOutput artworkBackdropMeshVertex(
+    const device ArtworkBackdropMeshVertex *vertices [[buffer(0)]],
+    constant float4 &motionParameters [[buffer(1)]],
+    uint vertexIdentifier [[vertex_id]]
+) {
+    ArtworkBackdropMeshVertex meshVertex = vertices[vertexIdentifier];
+    float elapsedTime = motionParameters.x;
+    float horizontalAmplitude = motionParameters.y;
+    float verticalAmplitude = motionParameters.z;
+    float edgeAttenuation = sin(meshVertex.textureCoordinate.x * M_PI_F)
+        * sin(meshVertex.textureCoordinate.y * M_PI_F);
+    float horizontalOffset = sin(
+        elapsedTime * 0.19 + meshVertex.textureCoordinate.y * M_PI_F * 2.0
+    ) * horizontalAmplitude * edgeAttenuation;
+    float verticalOffset = cos(
+        elapsedTime * 0.16 + meshVertex.textureCoordinate.x * M_PI_F * 2.0
+    ) * verticalAmplitude * edgeAttenuation;
 
-        weightedColor += paletteColors[colorIndex].rgb * influence;
-        averageColor += paletteColors[colorIndex].rgb;
-        totalInfluence += influence;
-    }
+    ArtworkBackdropMeshVertexOutput output;
+    output.position = float4(meshVertex.clipSpacePosition, 0.0, 1.0);
+    output.textureCoordinate = meshVertex.textureCoordinate
+        + float2(horizontalOffset, verticalOffset);
+    return output;
+}
 
-    averageColor /= 5.0;
-    float3 gradientColor = weightedColor / max(0.001, totalInfluence);
-    gradientColor = mix(gradientColor, averageColor, 0.08);
-
-    float staticGrain = fract(
-        sin(dot(input.position.xy, float2(12.9898, 78.233))) * 43758.5453
-    ) - 0.5;
-    gradientColor += staticGrain * grainAmount;
-    gradientColor *= 1.0 - clamp(darkOverlayOpacity, 0.0, 1.0);
-    return float4(clamp(gradientColor, 0.0, 1.0), 1.0);
+fragment float4 artworkBackdropFinalFragment(
+    ArtworkBackdropMeshVertexOutput input [[stage_in]],
+    texture2d<float> blurredArtworkTexture [[texture(0)]],
+    constant float4 &appearanceParameters [[buffer(0)]]
+) {
+    constexpr sampler artworkSampler(
+        address::clamp_to_edge,
+        filter::linear
+    );
+    float3 artworkColor = blurredArtworkTexture.sample(
+        artworkSampler,
+        input.textureCoordinate
+    ).rgb;
+    float luminosity = dot(artworkColor, float3(0.2126, 0.7152, 0.0722));
+    float3 saturatedColor = mix(
+        float3(luminosity),
+        artworkColor,
+        appearanceParameters.x
+    );
+    saturatedColor = mix(
+        saturatedColor,
+        float3(1.0),
+        clamp(appearanceParameters.z, 0.0, 1.0)
+    );
+    saturatedColor *= 1.0 - clamp(appearanceParameters.y, 0.0, 1.0);
+    return float4(clamp(saturatedColor, 0.0, 1.0), 1.0);
 }
