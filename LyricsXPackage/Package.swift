@@ -94,11 +94,11 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/Mx-Iris/FrameworkToolbox",
-            from: "0.5.2"
+            from: "0.10.0"
         ),
         .package(
             url: "https://github.com/Mx-Iris/UIFoundation",
-            from: "0.9.0"
+            from: "0.21.0"
         ),
         .package(
             url: "https://github.com/Lakr233/MSDisplayLink",
@@ -125,6 +125,7 @@ let package = Package(
             dependencies: [
                 "LyricsXFoundation",
                 .product(name: "MusicPlayer", package: "MusicPlayer"),
+                .product(name: "OSToolbox", package: "FrameworkToolbox"),
                 .product(name: "UIFoundation", package: "UIFoundation"),
                 .product(name: "MSDisplayLink", package: "MSDisplayLink"),
             ],
