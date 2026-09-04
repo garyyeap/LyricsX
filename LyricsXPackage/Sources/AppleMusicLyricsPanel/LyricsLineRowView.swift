@@ -2,6 +2,7 @@ import AppKit
 import CoreText
 import QuartzCore
 import LyricsXFoundation
+import OSToolbox
 
 extension AppleMusicLyrics {
     /// One lyric line, rendered as a layer-backed `NSView`.
@@ -17,6 +18,14 @@ extension AppleMusicLyrics {
     /// be made to look right: Music scales each glyph *inside* a mask while the
     /// sung/un-sung gradient sweeps *outside* it, and a single drawing pass cannot
     /// separate the two. Everything visual now lives in the layer tree.
+    @Loggable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "LyricsLine"
+    )
+    @Signpostable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "LyricsLine"
+    )
     final class SyncedLyricsLineView: NSView {
         // MARK: Model
 
@@ -36,7 +45,9 @@ extension AppleMusicLyrics {
         private var karaokeFraction: CGFloat = 0
         private var blurRadius: CGFloat = 0
         private var blurAnimationGeneration = 0
-        private var rasterizationStateBeforeBlurAnimation: Bool?
+        /// While the blur radius animates the row must not be cached, or the
+        /// bitmap would freeze one intermediate radius; see `updateRasterization`.
+        private var isBlurRadiusAnimating = false
 
         // MARK: Cached layout
 
@@ -70,6 +81,7 @@ extension AppleMusicLyrics {
             wantsLayer = true
             layerContentsRedrawPolicy = .onSetNeedsDisplay
             layer?.addSublayer(contentLayer)
+            updateRasterization()
         }
 
         @available(*, unavailable)
@@ -81,12 +93,36 @@ extension AppleMusicLyrics {
             true
         }
 
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            updateRasterization()
+        }
+
         override func viewDidChangeBackingProperties() {
             super.viewDidChangeBackingProperties()
             guard let scale = window?.backingScaleFactor else { return }
             contentLayer.contentsScale = scale
+            updateRasterization()
             laidOutForWidth = -1
             needsLayout = true
+        }
+
+        /// Apple Music's `SyncedLyricsLineLayer` sets `shouldRasterize = true` in
+        /// its initializer (`sub_1001A5294`) and keeps the gaussian blur filter
+        /// installed for life, so a line that is merely scrolling is one cached
+        /// bitmap to the render server instead of a tree of nested masks, word
+        /// glow and a blur pass. It only drops the cache while the blur radius
+        /// animates (`sub_1001DC498`), because a rasterized layer would hold one
+        /// intermediate radius for the whole transition.
+        ///
+        /// `rasterizationScale` defaults to 1, which would cache Retina text at
+        /// half resolution; it follows the window's backing scale instead.
+        private func updateRasterization() {
+            guard let layer else { return }
+            layer.shouldRasterize = !isBlurRadiusAnimating
+            if let backingScaleFactor = window?.backingScaleFactor {
+                layer.rasterizationScale = backingScaleFactor
+            }
         }
 
         // MARK: Configuration
@@ -204,6 +240,13 @@ extension AppleMusicLyrics {
         /// invalidated when the line, the fonts, or the backing scale change.
         private func buildLayoutIfNeeded(forWidth width: CGFloat) {
             guard width > 0, laidOutForWidth != width else { return }
+            let lineOriginalIndex = originalIndex
+            let layoutInterval = #signpost(
+                .begin,
+                "BuildLineLayout",
+                "originalIndex=\(lineOriginalIndex, privacy: .public) width=\(width, privacy: .public)"
+            )
+            defer { #signpost(.end, layoutInterval) }
             let textWidth = max(1, width - horizontalPadding * 2)
 
             guard let mainAttributed, let line else {
@@ -233,6 +276,20 @@ extension AppleMusicLyrics {
                 contentLayer.sungColor = CGColor(gray: 1, alpha: 1)
                 contentLayer.rebuild(with: layout, contentsScale: window?.backingScaleFactor ?? 2)
                 contentLayer.isHighlighted = isHighlighted
+                let renderedGlyphCount = layout.words.reduce(0) { partialCount, word in
+                    partialCount + word.glyphs.count
+                }
+                #log(
+                    .info,
+                    """
+                    Line layout built originalIndex=\(lineOriginalIndex, privacy: .public) \
+                    characterCount=\(line.content.count, privacy: .public) \
+                    visualRowCount=\(layout.visualLines.count, privacy: .public) \
+                    wordCount=\(layout.words.count, privacy: .public) \
+                    glyphCount=\(renderedGlyphCount, privacy: .public) \
+                    textWidth=\(textWidth, privacy: .public)
+                    """
+                )
             }
 
             if let translationAttributed {
@@ -311,6 +368,25 @@ extension AppleMusicLyrics {
             guard target != blurRadius, let layer, installBlurFilterIfNeeded() else { return }
             let visibleRadius = (layer.presentation()?.value(forKeyPath: Self.blurRadiusKeyPath) as? NSNumber)
                 .map(CGFloat.init(truncating:)) ?? blurRadius
+            let lineOriginalIndex = originalIndex
+            #log(
+                .debug,
+                """
+                Line blur changed originalIndex=\(lineOriginalIndex, privacy: .public) \
+                visibleRadius=\(visibleRadius, privacy: .public) \
+                targetRadius=\(target, privacy: .public) \
+                animated=\(animated, privacy: .public)
+                """
+            )
+            #signpost(
+                .event,
+                "LineBlurChanged",
+                """
+                originalIndex=\(lineOriginalIndex, privacy: .public) \
+                targetRadius=\(target, privacy: .public) \
+                animated=\(animated, privacy: .public)
+                """
+            )
             blurRadius = target
             blurAnimationGeneration += 1
             let animationGeneration = blurAnimationGeneration
@@ -321,10 +397,8 @@ extension AppleMusicLyrics {
             CATransaction.commit()
 
             if animated {
-                if rasterizationStateBeforeBlurAnimation == nil {
-                    rasterizationStateBeforeBlurAnimation = layer.shouldRasterize
-                }
-                layer.shouldRasterize = false
+                isBlurRadiusAnimating = true
+                updateRasterization()
                 let animation = CABasicAnimation(keyPath: Self.blurRadiusKeyPath)
                 animation.fromValue = visibleRadius
                 animation.toValue = target
@@ -337,24 +411,19 @@ extension AppleMusicLyrics {
                 )
                 layer.add(animation, forKey: Self.blurRadiusKeyPath)
                 let restorationDeadline = DispatchTime.now() + LyricsSpecs.lineBlurAnimationDuration
-                DispatchQueue.main.asyncAfter(deadline: restorationDeadline) { [weak self, weak layer] in
+                DispatchQueue.main.asyncAfter(deadline: restorationDeadline) { [weak self] in
                     guard let self,
-                          let layer,
                           self.blurAnimationGeneration == animationGeneration
                     else {
                         return
                     }
-                    if let rasterizationStateBeforeBlurAnimation = self.rasterizationStateBeforeBlurAnimation {
-                        layer.shouldRasterize = rasterizationStateBeforeBlurAnimation
-                    }
-                    self.rasterizationStateBeforeBlurAnimation = nil
+                    self.isBlurRadiusAnimating = false
+                    self.updateRasterization()
                 }
             } else {
                 layer.removeAnimation(forKey: Self.blurRadiusKeyPath)
-                if let rasterizationStateBeforeBlurAnimation {
-                    layer.shouldRasterize = rasterizationStateBeforeBlurAnimation
-                    self.rasterizationStateBeforeBlurAnimation = nil
-                }
+                isBlurRadiusAnimating = false
+                updateRasterization()
             }
         }
 
@@ -391,8 +460,32 @@ extension AppleMusicLyrics {
 
         func updateKaraoke(elapsedTime: TimeInterval, lineDuration: TimeInterval, mode: KaraokeMode) {
             guard let line, isHighlighted else { return }
-            buildLayoutIfNeeded(forWidth: bounds.width)
+            if FramePerformanceDiagnosticsPolicy.detailedFrameSignpostingIsEnabled {
+                #signpostInterval("KaraokeLineUpdate") {
+                    updateKaraokeContent(
+                        line: line,
+                        elapsedTime: elapsedTime,
+                        lineDuration: lineDuration,
+                        mode: mode
+                    )
+                }
+            } else {
+                updateKaraokeContent(
+                    line: line,
+                    elapsedTime: elapsedTime,
+                    lineDuration: lineDuration,
+                    mode: mode
+                )
+            }
+        }
 
+        private func updateKaraokeContent(
+            line: LyricsLine,
+            elapsedTime: TimeInterval,
+            lineDuration: TimeInterval,
+            mode: KaraokeMode
+        ) {
+            buildLayoutIfNeeded(forWidth: bounds.width)
             karaokeFraction = KaraokeFill.fraction(
                 elapsedTime: elapsedTime,
                 lineDuration: lineDuration,
@@ -401,7 +494,10 @@ extension AppleMusicLyrics {
                 totalCharacterCount: line.content.count,
                 mode: mode
             )
-            contentLayer.update(elapsedTime: elapsedTime, fillFraction: karaokeFraction)
+            contentLayer.update(
+                elapsedTime: elapsedTime,
+                fillFraction: karaokeFraction
+            )
         }
 
         // MARK: Hit testing

@@ -94,7 +94,9 @@ private final class OffscreenLineRenderer {
                 break
             }
             if hasInk {
-                if topRow == nil { topRow = row }
+                if topRow == nil {
+                    topRow = row
+                }
                 bottomRow = row
             }
         }
@@ -169,9 +171,15 @@ struct LineEmphasisProbes {
     }
 
     private static func glyphLayers(of contentLayer: AppleMusicLyrics.SyncedLyricsLineContentLayer) -> [CALayer] {
-        guard let maskContainer = contentLayer.mask else { return [] }
-        return (maskContainer.sublayers ?? []).flatMap { colorLayer in
-            colorLayer.mask?.sublayers ?? []
+        let visualRowColorContainers = (contentLayer.sublayers ?? []).filter { candidateLayer in
+            (candidateLayer.sublayers ?? []).contains { sublayer in
+                sublayer is AppleMusicLyrics.LineProgressGradientLayer
+            }
+        }
+        return visualRowColorContainers.flatMap { visualRowColorContainer in
+            (visualRowColorContainer.mask?.sublayers ?? []).flatMap { colorLayer in
+                colorLayer.mask?.sublayers ?? []
+            }
         }
     }
 

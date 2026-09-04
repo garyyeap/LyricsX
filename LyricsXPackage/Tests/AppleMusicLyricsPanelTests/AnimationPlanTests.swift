@@ -98,6 +98,53 @@ struct AnimationPlanTests {
         #expect(plan.returnDelays == [1])
     }
 
+    @Test(arguments: ["zh-Hans", "ja-JP", "en-US"])
+    func fullEmphasisPolicyGivesStructuredWordsTheInlineFallbackLook(languageIdentifier: String) {
+        let plan = AppleMusicLyrics.WordEmphasisPlan.make(
+            wordDuration: 0.4,
+            wordLength: 2,
+            renderedGlyphCount: 2,
+            timingGlyphCount: 2,
+            languageIdentifier: languageIdentifier,
+            timingSource: .synchronized,
+            structuredEmphasisPolicy: .fullEmphasis
+        )
+
+        #expect(plan.factor == 1)
+        #expect(abs(plan.scale - 1.14) < 0.000_001)
+        #expect(abs(plan.glowOpacity - 0.4) < 0.000_001)
+        #expect(plan.riseDelays.first == 0, "the full-emphasis look drops Apple Music's leading stagger")
+        #expect(abs((plan.riseDelays.last ?? 0) - plan.glyphStagger) < 0.000_001)
+    }
+
+    @Test func structuredEmphasisPolicyDefaultsToAppleMusicAndFollowsTheHiddenKey() throws {
+        let suiteName = "AnimationPlanTests.\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(AppleMusicLyrics.StructuredEmphasisPolicy.resolve(from: userDefaults) == .appleMusic26)
+
+        userDefaults.set("fullEmphasis", forKey: AppleMusicLyrics.StructuredEmphasisPolicy.userDefaultsKey)
+        #expect(AppleMusicLyrics.StructuredEmphasisPolicy.resolve(from: userDefaults) == .fullEmphasis)
+
+        userDefaults.set("somethingElse", forKey: AppleMusicLyrics.StructuredEmphasisPolicy.userDefaultsKey)
+        #expect(AppleMusicLyrics.StructuredEmphasisPolicy.resolve(from: userDefaults) == .appleMusic26)
+    }
+
+    @Test func cascadeVariantDefaultsToAppleMusicAndFollowsTheHiddenKey() throws {
+        let suiteName = "AnimationPlanTests.\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(AppleMusicLyrics.LineCascadeVariant.resolve(from: userDefaults) == .appleMusic26)
+
+        userDefaults.set("legacySwiftUI", forKey: AppleMusicLyrics.LineCascadeVariant.userDefaultsKey)
+        #expect(AppleMusicLyrics.LineCascadeVariant.resolve(from: userDefaults) == .legacySwiftUI)
+
+        userDefaults.set("somethingElse", forKey: AppleMusicLyrics.LineCascadeVariant.userDefaultsKey)
+        #expect(AppleMusicLyrics.LineCascadeVariant.resolve(from: userDefaults) == .appleMusic26)
+    }
+
     @Test func relativeLineAnchorPlacesTheFirstBaselineAtFortyPercent() {
         let visibleHeight: CGFloat = 800
         let firstBaselineOffset: CGFloat = 60

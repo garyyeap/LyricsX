@@ -4,13 +4,21 @@ import QuartzCore
 import Testing
 @testable import AppleMusicLyricsPanel
 
+private let generatedWrappedLyrics = [
+    "没有获得授权时，不得翻唱、翻录、改编或通过任何方式公开使用这段作品。",
+    "凌晨四点的风穿过空荡的站台，我仍然沿着灯光一步一步向前走。",
+    "We kept walking into the headwind while every streetlight disappeared behind us.",
+    "Bridge 之后的最后一句很长，Mmm, mmm, mmm 也必须严格按照视觉行从上到下推进。",
+]
+
 @MainActor
 struct LineEmphasisStructureProbes {
     private static let copyrightLine = "（未经著作权人许可，不得翻唱翻录或使用。）"
 
     private static func makeLayout(
         text: String,
-        timing: LyricsLine.Attachments.SynchronizedTextTiming
+        timing: LyricsLine.Attachments.SynchronizedTextTiming,
+        languageIdentifier: String = "en"
     ) -> AppleMusicLyrics.LineTextLayout? {
         let attributedString = NSAttributedString(
             string: text,
@@ -21,7 +29,7 @@ struct LineEmphasisStructureProbes {
             content: text,
             wordTimings: [],
             synchronizedTextTiming: timing,
-            languageIdentifier: "en",
+            languageIdentifier: languageIdentifier,
             lineDuration: timing.duration ?? 0,
             textWidth: 460
         )
@@ -30,14 +38,39 @@ struct LineEmphasisStructureProbes {
     private static func wordLayers(
         of contentLayer: AppleMusicLyrics.SyncedLyricsLineContentLayer
     ) -> [CALayer] {
-        guard let maskContainer = contentLayer.mask else { return [] }
-        return (maskContainer.sublayers ?? []).compactMap(\.mask)
+        visualRowColorContainers(of: contentLayer).flatMap { visualRowColorContainer in
+            (visualRowColorContainer.mask?.sublayers ?? []).compactMap(\.mask)
+        }
     }
 
     private static func glyphLayers(
         of contentLayer: AppleMusicLyrics.SyncedLyricsLineContentLayer
     ) -> [CALayer] {
         wordLayers(of: contentLayer).flatMap { $0.sublayers ?? [] }
+    }
+
+    private static func visualRowColorContainers(
+        of contentLayer: AppleMusicLyrics.SyncedLyricsLineContentLayer
+    ) -> [CALayer] {
+        (contentLayer.sublayers ?? []).filter { candidateLayer in
+            (candidateLayer.sublayers ?? []).contains { sublayer in
+                sublayer is AppleMusicLyrics.LineProgressGradientLayer
+            }
+        }
+    }
+
+    private static func generatedLayout(for text: String) -> AppleMusicLyrics.LineTextLayout? {
+        let attributedString = NSAttributedString(
+            string: text,
+            attributes: [.font: NSFont.systemFont(ofSize: 32, weight: .bold)]
+        )
+        return AppleMusicLyrics.LineTextLayout.build(
+            attributed: attributedString,
+            content: text,
+            wordTimings: [],
+            lineDuration: 4,
+            textWidth: 360
+        )
     }
 
     @Test func glowLivesOnRasterizedWordLayersAndResetRemovesIt() throws {
@@ -67,6 +100,37 @@ struct LineEmphasisStructureProbes {
         #expect(firstWordLayer.shadowOpacity == AppleMusicLyrics.LyricsSpecs.glowOpacityRange.lowerBound)
         #expect(firstWordLayer.animation(forKey: "AppleMusicLyrics.shadowOpacity") == nil)
         #expect(glyphLayers.allSatisfy { $0.animationKeys()?.isEmpty != false })
+    }
+
+    /// Chinese structured lyrics are where the two policies differ most: under
+    /// Apple Music's gate a `zh` word only lifts, under the full-emphasis look it
+    /// swells and glows exactly like an inline-tag word.
+    @Test(arguments: [
+        (AppleMusicLyrics.StructuredEmphasisPolicy.appleMusic26, Float(0)),
+        (AppleMusicLyrics.StructuredEmphasisPolicy.fullEmphasis, Float(0.4)),
+    ])
+    func structuredChineseWordGlowsOnlyUnderTheFullEmphasisPolicy(
+        policy: AppleMusicLyrics.StructuredEmphasisPolicy,
+        expectedGlowOpacity: Float
+    ) throws {
+        let timing = LyricsLine.Attachments.SynchronizedTextTiming(
+            words: [.init(characterRange: 0 ..< 2, timeRange: 0 ..< 0.5)],
+            duration: 0.5
+        )
+        let layout = try #require(Self.makeLayout(text: "风走", timing: timing, languageIdentifier: "zh-Hans"))
+        let contentLayer = AppleMusicLyrics.SyncedLyricsLineContentLayer()
+        contentLayer.structuredEmphasisPolicyProvider = { policy }
+        contentLayer.isHighlighted = true
+        contentLayer.rebuild(with: layout, contentsScale: 2)
+
+        contentLayer.update(elapsedTime: 0, fillFraction: 0)
+
+        let wordLayer = try #require(Self.wordLayers(of: contentLayer).first)
+        #expect(wordLayer.shadowOpacity == expectedGlowOpacity)
+        #expect((wordLayer.animation(forKey: "AppleMusicLyrics.shadowOpacity") != nil) == (expectedGlowOpacity > 0))
+        #expect(Self.glyphLayers(of: contentLayer).allSatisfy { glyphLayer in
+            glyphLayer.animation(forKey: "AppleMusicLyrics.position") != nil
+        }, "the lift is scheduled under both policies")
     }
 
     @Test func seekWithinTheSelectedLineResynchronizesTheActiveWord() throws {
@@ -107,7 +171,7 @@ struct LineEmphasisStructureProbes {
             lineDuration: 4,
             textWidth: rowWidth - 48
         ))
-        #expect(layout.visualLineWidths.count == 2)
+        #expect(layout.visualLines.count == 2)
         let firstVisualRowMinimumVerticalPosition = try #require(
             layout.words.filter { $0.visualLineIndex == 0 }.map(\.frame.minY).min()
         )
@@ -139,10 +203,89 @@ struct LineEmphasisStructureProbes {
             contentLayer.isGeometryFlipped,
             "the content layer must preserve the y-down coordinates produced by LineTextLayout"
         )
-        let glyphMaskContainer = try #require(contentLayer.mask)
+        let visualRowColorContainers = Self.visualRowColorContainers(of: contentLayer)
+        #expect(visualRowColorContainers.count == layout.visualLines.count)
+        #expect(visualRowColorContainers.allSatisfy { visualRowColorContainer in
+            visualRowColorContainer.isGeometryFlipped
+        })
+        #expect(visualRowColorContainers.allSatisfy { visualRowColorContainer in
+            visualRowColorContainer.mask?.isGeometryFlipped == true
+        }, "each mask container that positions wrapped words must use the same y-down coordinates")
+    }
+
+    @Test(arguments: generatedWrappedLyrics)
+    func wrappedRowsUseIndependentSungColorContainers(text: String) throws {
+        let layout = try #require(Self.generatedLayout(for: text))
+        #expect(layout.visualLines.count >= 2)
+
+        let contentLayer = AppleMusicLyrics.SyncedLyricsLineContentLayer()
+        contentLayer.isHighlighted = true
+        contentLayer.rebuild(with: layout, contentsScale: 2)
+
+        let visualRowColorContainers = Self.visualRowColorContainers(of: contentLayer)
         #expect(
-            glyphMaskContainer.isGeometryFlipped,
-            "the mask container that positions wrapped words must use the same y-down coordinates"
+            visualRowColorContainers.count == layout.visualLines.count,
+            "each wrapped visual row needs its own masked color container so one row cannot illuminate another"
         )
+
+        for (visualRowIndex, visualRowColorContainer) in visualRowColorContainers.enumerated() {
+            let visualRowMask = try #require(visualRowColorContainer.mask)
+            let expectedWordCount = layout.words.count { word in
+                word.visualLineIndex == visualRowIndex
+            }
+            #expect(visualRowMask.sublayers?.count == expectedWordCount)
+
+            let progressGradient = try #require(
+                visualRowColorContainer.sublayers?.first { sublayer in
+                    sublayer is AppleMusicLyrics.LineProgressGradientLayer
+                } as? AppleMusicLyrics.LineProgressGradientLayer
+            )
+            let typographicFrame = layout.visualLines[visualRowIndex].typographicFrame
+            #expect(
+                visualRowColorContainer.frame.minY + progressGradient.position.y
+                    == contentLayer.textOutset.height + typographicFrame.minY - progressGradient.verticalPadding
+            )
+            #expect(
+                visualRowColorContainer.frame.minX + progressGradient.position.x
+                    == contentLayer.textOutset.width + typographicFrame.minX
+                    + progressGradient.originX(forFillEdge: 0)
+            )
+            #expect(
+                progressGradient.bounds.height
+                    == typographicFrame.height + progressGradient.verticalPadding * 2
+            )
+            #expect(
+                visualRowColorContainer.frame.height
+                    == typographicFrame.height + contentLayer.textOutset.height * 2
+            )
+        }
+
+        let firstProgressGradient = try #require(
+            visualRowColorContainers[0].sublayers?.first { sublayer in
+                sublayer is AppleMusicLyrics.LineProgressGradientLayer
+            } as? AppleMusicLyrics.LineProgressGradientLayer
+        )
+        let secondProgressGradient = try #require(
+            visualRowColorContainers[1].sublayers?.first { sublayer in
+                sublayer is AppleMusicLyrics.LineProgressGradientLayer
+            } as? AppleMusicLyrics.LineProgressGradientLayer
+        )
+        let initialFirstGradientPosition = firstProgressGradient.position.x
+        let initialSecondGradientPosition = secondProgressGradient.position.x
+        let firstVisualRowWidth = layout.visualLines[0].typographicFrame.width
+        let secondVisualRowWidth = layout.visualLines[1].typographicFrame.width
+
+        contentLayer.update(
+            elapsedTime: 1,
+            fillFraction: firstVisualRowWidth * 0.5 / layout.totalTextWidth
+        )
+        #expect(firstProgressGradient.position.x > initialFirstGradientPosition)
+        #expect(secondProgressGradient.position.x == initialSecondGradientPosition)
+
+        contentLayer.update(
+            elapsedTime: 2,
+            fillFraction: (firstVisualRowWidth + secondVisualRowWidth * 0.25) / layout.totalTextWidth
+        )
+        #expect(secondProgressGradient.position.x > initialSecondGradientPosition)
     }
 }

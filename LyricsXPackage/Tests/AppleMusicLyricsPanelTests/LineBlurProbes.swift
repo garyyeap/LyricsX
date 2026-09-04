@@ -36,4 +36,30 @@ struct LineBlurProbes {
         try await Task.sleep(seconds: 0.18)
         #expect(lineLayer.shouldRasterize == true)
     }
+
+    /// Apple Music's `SyncedLyricsLineLayer` is rasterized from `init` on and only
+    /// drops the bitmap while its blur radius animates. A row that is never
+    /// rasterized is recomposited — nested masks, word glow and gaussian blur —
+    /// on every frame of a line cascade, which is what pushed full-screen line
+    /// changes down to 30 FPS.
+    @Test func rowLayersRasterizeLikeAppleMusicWithoutBeingAsked() async throws {
+        let frame = NSRect(x: 0, y: 0, width: 500, height: 160)
+        let lineView = AppleMusicLyrics.SyncedLyricsLineView(frame: frame)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = lineView
+        defer { window.contentView = nil }
+        lineView.layoutSubtreeIfNeeded()
+
+        let lineLayer = try #require(lineView.layer)
+        #expect(lineLayer.shouldRasterize == true)
+        #expect(lineLayer.rasterizationScale == window.backingScaleFactor)
+
+        lineView.setLineBlurRadius(AppleMusicLyrics.LyricsSpecs.deselectedLineBlurRadius, animated: true)
+        #expect(lineLayer.shouldRasterize == false)
+
+        try await Task.sleep(seconds: 0.18)
+        #expect(lineLayer.shouldRasterize == true)
+        #expect(lineLayer.rasterizationScale == window.backingScaleFactor)
+    }
 }

@@ -26,14 +26,19 @@ extension AppleMusicLyrics {
             renderedGlyphCount: Int,
             timingGlyphCount: Int,
             languageIdentifier: String?,
-            timingSource: TimingSource
+            timingSource: TimingSource,
+            structuredEmphasisPolicy: StructuredEmphasisPolicy = .appleMusic26
         ) -> WordEmphasisPlan {
             let safeDuration = max(0, wordDuration)
             let safeRenderedGlyphCount = max(0, renderedGlyphCount)
             let safeTimingGlyphCount = max(1, timingGlyphCount)
             let factor: CGFloat
-            switch timingSource {
-            case .synchronized:
+            // Music offsets every glyph by `index + 1`, which costs a whole
+            // stagger before its first glyph moves. The full-emphasis look and
+            // the inline-tag fallback drop that leading offset.
+            let leadsWithAStagger: Bool
+            switch (timingSource, structuredEmphasisPolicy) {
+            case (.synchronized, .appleMusic26):
                 if LyricsLanguageCapabilities.allowsAdditionalEmphasis(languageIdentifier: languageIdentifier),
                    safeDuration > 1,
                    wordLength <= 7 {
@@ -41,8 +46,11 @@ extension AppleMusicLyrics {
                 } else {
                     factor = 0
                 }
-            case .inferred:
+                leadsWithAStagger = true
+            case (.synchronized, .fullEmphasis),
+                 (.inferred, _):
                 factor = 1
+                leadsWithAStagger = false
             }
 
             let scale = LyricsSpecs.emphasizingScaleRange.lowerBound
@@ -58,12 +66,7 @@ extension AppleMusicLyrics {
                 glyphCount: safeTimingGlyphCount
             )
             let riseDelays = (0 ..< safeRenderedGlyphCount).map { glyphIndex in
-                switch timingSource {
-                case .synchronized:
-                    return glyphStagger * TimeInterval(glyphIndex + 1)
-                case .inferred:
-                    return glyphStagger * TimeInterval(glyphIndex)
-                }
+                glyphStagger * TimeInterval(glyphIndex + (leadsWithAStagger ? 1 : 0))
             }
             let returnDelays = riseDelays.map { $0 + returnInterval }
 
@@ -96,9 +99,22 @@ extension AppleMusicLyrics {
 
     enum LineTransitionPlan {
         static let selectedLineBaselineViewportFraction: CGFloat = 0.4
+        /// `LyricsSpecs.lineChangeSpringTimingParametersValues` as Music 26.6's
+        /// `LyricsSpecs` initializer (`sub_1001D1C28`) fills it in; neither the
+        /// pretty-mode closure nor Music's own overrides touch it. Every visible
+        /// row rides this spring during an Apple Music line change: damping
+        /// ratio ≈ 0.9, natural period ≈ 0.63 s.
         static let normalSpringMass: CGFloat = 1
         static let normalSpringStiffness: CGFloat = 100
         static let normalSpringDamping: CGFloat = 18
+        /// `LyricsSpecs.lineDelay` in the full-window (pretty) mode; the sidebar
+        /// uses 0.02. `sub_1001DCBD4` delays row `n` by `lineDelay × n` counted
+        /// from the top of the viewport.
+        static let appleMusicLineDelay: TimeInterval = 0.05
+        /// When the lyrics move backwards the same function hands the delays out
+        /// from the bottom row up and halves them — its own debug log calls this
+        /// "the duration hack".
+        static let appleMusicBackwardLineDelayScale: Double = 0.5
         static let interactiveSpringMass: CGFloat = 2
         static let interactiveSpringStiffness: CGFloat = 260
         static let interactiveSpringDamping: CGFloat = 50

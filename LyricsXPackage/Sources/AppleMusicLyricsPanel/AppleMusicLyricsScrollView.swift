@@ -3,10 +3,19 @@ import QuartzCore
 import Combine
 import LyricsXFoundation
 import MSDisplayLink
+import OSToolbox
 
 // MARK: - Container View (AppKit + CALayer lyrics engine)
 
 extension AppleMusicLyrics {
+    @Loggable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "LyricsFrame"
+    )
+    @Signpostable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "LyricsFrame"
+    )
     final class SyncedLyricsContainerView: NSView {
         // MARK: Inputs
 
@@ -33,6 +42,8 @@ extension AppleMusicLyrics {
         private var signature: LayoutSignature?
         private var lastLaidOutSize: CGSize = .zero
         private var displayLink: DisplayLink?
+        private var displayLinkFrameTimingAccumulator = FrameTimingAccumulator()
+        private var displayLinkWorkTimingAccumulator = FrameWorkTimingAccumulator()
         private var preferenceObservers: Set<AnyCancellable> = []
         private let lineTransitionCoordinator = LineTransitionCoordinator()
         private var pendingInteractiveTargetOriginalIndex: Int?
@@ -48,10 +59,20 @@ extension AppleMusicLyrics {
         /// karaoke fill and the intro/interlude indicators together.
         private var resolvedPlaybackTime: TimeInterval = 0
 
-        /// Normal advances use the previous SwiftUI row cascade because one
-        /// highly damped clip spring makes the stack look like a rigid translation.
-        /// Rapid advances settle the clip as a unit so delayed row springs cannot
-        /// pile up when several highlights arrive together.
+        /// Which row cascade a normal advance runs; see `LineCascadeVariant`.
+        /// Read on every advance so the hidden defaults key can be flipped while
+        /// a song plays. Probes inject a fixed variant.
+        private var lineCascadeVariantProvider: () -> LineCascadeVariant = {
+            LineCascadeVariant.resolve()
+        }
+
+        /// A line change that arrived while an Apple Music cascade was still
+        /// settling. Music refuses to select a new line while its line-change
+        /// animators are in flight and catches up once they finish; this holds the
+        /// latest requested line until then.
+        private var deferredHighlightedOriginalIndex: Int?
+        /// The legacy cascade settles the clip as a unit when several highlights
+        /// arrive together, so delayed row springs cannot pile up.
         private var lastHighlightedPosition: Int?
         /// A line advance further than this (e.g. a seek) snaps instantly instead of
         /// springing across the whole song.
@@ -111,6 +132,10 @@ extension AppleMusicLyrics {
 
         func setLineTransitionTimeProvider(_ provider: @escaping () -> CFTimeInterval) {
             lineTransitionTimeProvider = provider
+        }
+
+        func setLineCascadeVariantProvider(_ provider: @escaping () -> LineCascadeVariant) {
+            lineCascadeVariantProvider = provider
         }
 
         private func setupScrollView() {
@@ -207,7 +232,20 @@ extension AppleMusicLyrics {
 
             let resolvedIndex = resolveRenderedIndex(highlightedLineIndex)
             if resolvedIndex != highlightedOriginalIndex {
-                applyHighlight(originalIndex: resolvedIndex, animated: true)
+                if shouldDeferHighlight(to: resolvedIndex) {
+                    deferredHighlightedOriginalIndex = resolvedIndex
+                    let deferredIndex = resolvedIndex ?? -1
+                    #log(
+                        .info,
+                        "Line change deferred until the cascade settles originalIndex=\(deferredIndex, privacy: .public)"
+                    )
+                } else {
+                    applyHighlight(originalIndex: resolvedIndex, animated: true)
+                }
+            } else {
+                // The latest known line is the one already shown, so anything
+                // held back by an earlier cascade is stale.
+                deferredHighlightedOriginalIndex = nil
             }
 
             // When following resumes together with a data update, snap back to
@@ -263,6 +301,7 @@ extension AppleMusicLyrics {
             lastHighlightedPosition = nil
             lastLineTransitionTime = nil
             pendingInteractiveTargetOriginalIndex = nil
+            deferredHighlightedOriginalIndex = nil
             lineTransitionCoordinator.cancel(scrollView: scrollView)
             enabledLineViews.forEach { $0.removeFromSuperview() }
             enabledLineViews.removeAll()
@@ -383,7 +422,36 @@ extension AppleMusicLyrics {
 
         // MARK: Highlight
 
+        /// Music will not select a new line while a line-change animator is in
+        /// flight (`sub_1001D8C08` skips the manager update whenever
+        /// `currentAnimators` is non-empty) and catches up when it settles. Only
+        /// the Apple Music cascade adopts that; the legacy cascade keeps its own
+        /// rapid-change settle. A tapped line and a scroll-away never wait.
+        private func shouldDeferHighlight(to originalIndex: Int?) -> Bool {
+            guard originalIndex != nil,
+                  lineCascadeVariantProvider() == .appleMusic26,
+                  window != nil,
+                  interactionState?.isFollowing ?? true,
+                  pendingInteractiveTargetOriginalIndex != originalIndex
+            else {
+                return false
+            }
+            return lineTransitionCoordinator.isCascadeInFlight
+        }
+
+        private func applyDeferredHighlightIfNeeded() {
+            guard let deferredIndex = deferredHighlightedOriginalIndex else { return }
+            deferredHighlightedOriginalIndex = nil
+            guard deferredIndex != highlightedOriginalIndex else { return }
+            #log(
+                .info,
+                "Deferred line change applied originalIndex=\(deferredIndex, privacy: .public)"
+            )
+            applyHighlight(originalIndex: deferredIndex, animated: true)
+        }
+
         private func applyHighlight(originalIndex: Int?, animated: Bool) {
+            deferredHighlightedOriginalIndex = nil
             if let old = highlightedOriginalIndex, let view = lineViewByOriginalIndex[old] {
                 view.setHighlighted(false)
             }
@@ -407,8 +475,9 @@ extension AppleMusicLyrics {
         }
 
         /// Move to a newly highlighted line while following. A large noninteractive
-        /// jump snaps instantly, a rapid sequence settles the clip as a unit, and a
-        /// normal advance runs the row cascade restored from the SwiftUI renderer.
+        /// jump snaps instantly; otherwise the selected cascade variant runs. The
+        /// legacy variant additionally settles the clip as a unit when highlights
+        /// arrive in rapid succession.
         private func advanceFollowing(toOriginalIndex originalIndex: Int) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
             let newPosition = view.enabledPosition
@@ -422,19 +491,47 @@ extension AppleMusicLyrics {
             } ?? false
             lastHighlightedPosition = newPosition
             lastLineTransitionTime = currentLineTransitionTime
+            let variant = lineCascadeVariantProvider()
 
+            let transitionKind: String
             if usesInteractiveSpring {
+                transitionKind = "interactiveSpring"
                 centerLine(originalIndex: originalIndex, animated: true, usesInteractiveSpring: true)
             } else if isJump {
+                transitionKind = "jump"
                 centerLine(originalIndex: originalIndex, animated: false)
-            } else if isRapid {
-                settleLine(originalIndex: originalIndex)
             } else {
-                cascadeLine(originalIndex: originalIndex)
+                switch variant {
+                case .appleMusic26:
+                    transitionKind = "appleMusicCascade"
+                    cascadeVisibleLines(originalIndex: originalIndex)
+                case .legacySwiftUI where isRapid:
+                    transitionKind = "rapidSettle"
+                    settleLine(originalIndex: originalIndex)
+                case .legacySwiftUI:
+                    transitionKind = "cascade"
+                    cascadeLine(originalIndex: originalIndex)
+                }
             }
+            #log(
+                .info,
+                """
+                Line advance kind=\(transitionKind, privacy: .public) \
+                variant=\(variant.rawValue, privacy: .public) \
+                originalIndex=\(originalIndex, privacy: .public) \
+                enabledPosition=\(newPosition, privacy: .public)
+                """
+            )
+            #signpost(
+                .event,
+                "LineAdvance",
+                "kind=\(transitionKind, privacy: .public) enabledPosition=\(newPosition, privacy: .public)"
+            )
         }
 
         private func updateDistances(animated: Bool) {
+            let distanceUpdateInterval = #signpost(.begin, "UpdateLineDistances")
+            defer { #signpost(.end, distanceUpdateInterval) }
             let highlightedPosition = highlightedOriginalIndex.flatMap { lineViewByOriginalIndex[$0]?.enabledPosition }
             let visibleBounds = scrollView.documentVisibleRect.insetBy(
                 dx: 0,
@@ -449,6 +546,14 @@ extension AppleMusicLyrics {
             let blurPlan = LineBlurPlan.make(
                 visibleLinePositions: visibleLinePositions,
                 selectedLinePosition: highlightedPosition
+            )
+            #log(
+                .debug,
+                """
+                Distance update animated=\(animated, privacy: .public) \
+                visibleLines=\(visibleLinePositions.count, privacy: .public) \
+                blurredLines=\(blurPlan.blurredLinePositions.count, privacy: .public)
+                """
             )
             for view in enabledLineViews {
                 let isSelected = highlightedPosition.map { view.enabledPosition == $0 } ?? false
@@ -479,6 +584,28 @@ extension AppleMusicLyrics {
         }
 
         // MARK: Scrolling
+
+        private func cascadeVisibleLines(originalIndex: Int) {
+            guard let view = lineViewByOriginalIndex[originalIndex] else { return }
+            let configuration = UniformLineCascadeConfiguration(
+                springTiming: SpringTimingParameters(
+                    mass: LineTransitionPlan.normalSpringMass,
+                    stiffness: LineTransitionPlan.normalSpringStiffness,
+                    damping: LineTransitionPlan.normalSpringDamping
+                ),
+                lineDelay: LineTransitionPlan.appleMusicLineDelay,
+                backwardLineDelayScale: LineTransitionPlan.appleMusicBackwardLineDelayScale
+            )
+            lineTransitionCoordinator.transitionVisibleLines(
+                scrollView: scrollView,
+                lineViews: enabledLineViews,
+                targetClipVerticalOrigin: clampedClipVerticalOrigin(for: view),
+                configuration: configuration,
+                animated: window != nil
+            ) { [weak self] in
+                self?.applyDeferredHighlightIfNeeded()
+            }
+        }
 
         private func cascadeLine(originalIndex: Int) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
@@ -593,6 +720,9 @@ extension AppleMusicLyrics {
             // does not keep moving content under the drag.
             lineTransitionCoordinator.cancel(scrollView: scrollView)
             interactionState?.userDidScroll()
+            // The cascade that held a line change back is gone, and following is
+            // off, so the held line only updates its highlight without scrolling.
+            applyDeferredHighlightIfNeeded()
         }
 
         // MARK: Display Link (per-frame karaoke driver)
@@ -604,11 +734,18 @@ extension AppleMusicLyrics {
             // driver runs on every supported macOS version.
             let link = DisplayLink()
             link.delegatingObject(self)
+            displayLinkFrameTimingAccumulator = FrameTimingAccumulator()
+            displayLinkWorkTimingAccumulator = FrameWorkTimingAccumulator()
             displayLink = link
+            #log(.info, "Lyrics display link started")
+            #signpost(.event, "DisplayLinkStarted")
         }
 
         private func stopDisplayLink() {
+            guard displayLink != nil else { return }
             displayLink = nil
+            #log(.info, "Lyrics display link stopped")
+            #signpost(.event, "DisplayLinkStopped")
         }
 
         private func handleDisplayLink() {
@@ -616,14 +753,23 @@ extension AppleMusicLyrics {
             // (`lyricsDisplayTime`) — the canonical source every other lyrics view
             // uses, accurate while playing and (now) stable when paused. Everything
             // below uses this single value.
-            resolvedPlaybackTime = selectedPlayer.playbackState.lyricsDisplayTime(
-                trackDuration: selectedPlayer.currentTrack?.duration
-            )
+            if FramePerformanceDiagnosticsPolicy.detailedFrameSignpostingIsEnabled {
+                resolvedPlaybackTime = #signpostInterval("LyricsPlaybackStateRead") {
+                    currentLyricsPlaybackTime()
+                }
+            } else {
+                resolvedPlaybackTime = currentLyricsPlaybackTime()
+            }
             // Nothing here advances a transition: Core Animation owns the clip
             // spring, so it keeps moving at the display's own rate even when this
             // callback is late.
-            updateIntroDotsIfNeeded()
-            updateInterludesIfNeeded()
+            if FramePerformanceDiagnosticsPolicy.detailedFrameSignpostingIsEnabled {
+                #signpostInterval("LyricsInstrumentalProgressUpdate") {
+                    updateInstrumentalProgress()
+                }
+            } else {
+                updateInstrumentalProgress()
+            }
 
             guard let lyrics,
                   let highlighted = highlightedOriginalIndex,
@@ -631,9 +777,42 @@ extension AppleMusicLyrics {
                   let view = lineViewByOriginalIndex[highlighted] else { return }
             let line = lyrics.lines[highlighted]
             let elapsed = resolvedPlaybackTime + lyrics.adjustedTimeDelay - line.position
-            view.updateKaraoke(
-                elapsedTime: elapsed,
-                lineDuration: lineDuration(forOriginalIndex: highlighted),
+            if FramePerformanceDiagnosticsPolicy.detailedFrameSignpostingIsEnabled {
+                #signpostInterval("LyricsKaraokeLineUpdate") {
+                    updateKaraokeLine(
+                        view,
+                        elapsedTime: elapsed,
+                        originalIndex: highlighted
+                    )
+                }
+            } else {
+                updateKaraokeLine(
+                    view,
+                    elapsedTime: elapsed,
+                    originalIndex: highlighted
+                )
+            }
+        }
+
+        private func currentLyricsPlaybackTime() -> TimeInterval {
+            selectedPlayer.playbackState.lyricsDisplayTime(
+                trackDuration: selectedPlayer.currentTrack?.duration
+            )
+        }
+
+        private func updateInstrumentalProgress() {
+            updateIntroDotsIfNeeded()
+            updateInterludesIfNeeded()
+        }
+
+        private func updateKaraokeLine(
+            _ lineView: SyncedLyricsLineView,
+            elapsedTime: TimeInterval,
+            originalIndex: Int
+        ) {
+            lineView.updateKaraoke(
+                elapsedTime: elapsedTime,
+                lineDuration: lineDuration(forOriginalIndex: originalIndex),
                 mode: karaokeMode
             )
         }
@@ -743,6 +922,62 @@ extension AppleMusicLyrics {
 
 extension AppleMusicLyrics.SyncedLyricsContainerView: DisplayLinkDelegate {
     func synchronization(context: DisplayLinkCallbackContext) {
-        handleDisplayLink()
+        let arrivalTimestamp = CACurrentMediaTime()
+        let cadenceReport = displayLinkFrameTimingAccumulator.record(
+            sourceTimestamp: context.timestamp,
+            arrivalTimestamp: arrivalTimestamp,
+            targetTimestamp: context.targetTimestamp,
+            expectedFrameDuration: context.duration
+        )
+
+        let workStartTimestamp = CACurrentMediaTime()
+        if AppleMusicLyrics.FramePerformanceDiagnosticsPolicy
+            .detailedFrameSignpostingIsEnabled {
+            #signpostInterval("LyricsDisplayLinkFrame") {
+                handleDisplayLink()
+            }
+        } else {
+            handleDisplayLink()
+        }
+        let workDuration = CACurrentMediaTime() - workStartTimestamp
+        displayLinkWorkTimingAccumulator.record(
+            duration: workDuration,
+            expectedFrameDuration: context.duration
+        )
+
+        guard let cadenceReport else { return }
+
+        let workReport = displayLinkWorkTimingAccumulator.takeReport()
+        let highlightedLine: LyricsLine?
+        if let highlightedOriginalIndex,
+           let lyrics,
+           lyrics.lines.indices.contains(highlightedOriginalIndex) {
+            highlightedLine = lyrics.lines[highlightedOriginalIndex]
+        } else {
+            highlightedLine = nil
+        }
+        let highlightedLineCharacterCount = highlightedLine?.content.count ?? 0
+        let highlightedLineTimingEntryCount = highlightedLine?.wordTimingEntries?.count ?? 0
+        let highlightedLineIndex = highlightedOriginalIndex ?? -1
+        #log(
+            .info,
+            """
+            Lyrics cadence nominalFramesPerSecond=\(cadenceReport.nominalFramesPerSecond, privacy: .public) \
+            sourceFramesPerSecond=\(cadenceReport.sourceFramesPerSecond, privacy: .public) \
+            mainFramesPerSecond=\(cadenceReport.arrivalFramesPerSecond, privacy: .public) \
+            sourceMissedFrames=\(cadenceReport.missedSourceFrameCount, privacy: .public) \
+            mainMissedFrames=\(cadenceReport.missedArrivalFrameCount, privacy: .public) \
+            maximumSourceGapMilliseconds=\(cadenceReport.maximumSourceGapMilliseconds, privacy: .public) \
+            maximumMainGapMilliseconds=\(cadenceReport.maximumArrivalGapMilliseconds, privacy: .public) \
+            maximumDeliveryLatenessMilliseconds=\(cadenceReport.maximumDeliveryLatenessMilliseconds, privacy: .public) \
+            workSamples=\(workReport?.sampledFrameCount ?? 0, privacy: .public) \
+            averageWorkMilliseconds=\(workReport?.averageDurationMilliseconds ?? 0, privacy: .public) \
+            maximumWorkMilliseconds=\(workReport?.maximumDurationMilliseconds ?? 0, privacy: .public) \
+            workBudgetOverruns=\(workReport?.frameBudgetOverrunCount ?? 0, privacy: .public) \
+            highlightedLineIndex=\(highlightedLineIndex, privacy: .public) \
+            highlightedLineCharacters=\(highlightedLineCharacterCount, privacy: .public) \
+            timingEntries=\(highlightedLineTimingEntryCount, privacy: .public)
+            """
+        )
     }
 }

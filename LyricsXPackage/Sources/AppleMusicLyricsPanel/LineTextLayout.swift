@@ -12,6 +12,12 @@ extension AppleMusicLyrics {
     /// space, which is y-down (the layer sets `isGeometryFlipped`) so it lines up
     /// with the flipped view that hosts it.
     struct LineTextLayout {
+        /// Exact Core Text geometry for one visual row after wrapping.
+        struct VisualLine {
+            /// Typographic bounds in the content layer's y-down coordinate space.
+            let typographicFrame: CGRect
+        }
+
         /// One glyph, positioned inside its word.
         struct Glyph {
             let run: CTRun
@@ -63,15 +69,14 @@ extension AppleMusicLyrics {
         }
 
         let words: [Word]
-        /// Typographic width of each visual (wrapped) row.
-        let visualLineWidths: [CGFloat]
-        /// Left edge of each visual row's text, parallel to `visualLineWidths`.
-        let visualLineLeftEdges: [CGFloat]
+        let visualLines: [VisualLine]
         let contentSize: CGSize
         let languageIdentifier: String?
 
         var totalTextWidth: CGFloat {
-            visualLineWidths.reduce(0, +)
+            visualLines.reduce(0) { accumulatedWidth, visualLine in
+                accumulatedWidth + visualLine.typographicFrame.width
+            }
         }
     }
 }
@@ -126,8 +131,7 @@ extension AppleMusicLyrics.LineTextLayout {
         )
 
         var words: [Word] = []
-        var visualLineWidths: [CGFloat] = []
-        var visualLineLeftEdges: [CGFloat] = []
+        var visualLines: [VisualLine] = []
         var contentHeight: CGFloat = 0
 
         for (visualLineIndex, coreTextLine) in coreTextLines.enumerated() {
@@ -135,10 +139,14 @@ extension AppleMusicLyrics.LineTextLayout {
             var descent: CGFloat = 0
             var leading: CGFloat = 0
             let width = CGFloat(CTLineGetTypographicBounds(coreTextLine, &ascent, &descent, &leading))
-            visualLineWidths.append(width)
-            visualLineLeftEdges.append(lineOrigins[visualLineIndex].x)
 
             let baselineY = blockTopInPathSpace - lineOrigins[visualLineIndex].y
+            visualLines.append(VisualLine(typographicFrame: CGRect(
+                x: lineOrigins[visualLineIndex].x,
+                y: baselineY - ascent,
+                width: width,
+                height: ascent + descent
+            )))
             contentHeight = max(contentHeight, baselineY + descent + leading)
 
             words.append(contentsOf: makeWords(
@@ -159,8 +167,7 @@ extension AppleMusicLyrics.LineTextLayout {
 
         return AppleMusicLyrics.LineTextLayout(
             words: words,
-            visualLineWidths: visualLineWidths,
-            visualLineLeftEdges: visualLineLeftEdges,
+            visualLines: visualLines,
             contentSize: CGSize(width: textWidth, height: ceil(contentHeight)),
             languageIdentifier: languageIdentifier
         )

@@ -1,17 +1,19 @@
 import AppKit
 import QuartzCore
+import OSToolbox
 
 extension AppleMusicLyrics {
     /// One lyric line's main text, built the way Apple Music builds it.
     ///
     /// ```
-    /// SyncedLyricsLineContentLayer          mask = glyphMaskContainer
-    /// ├── backgroundColorLayer              the un-sung colour, over the whole line
-    /// ├── LineProgressGradientLayer × rows  the sung colour + its feathered edge
-    /// └── glyphMaskContainer                (the mask)
-    ///     └── word colour layer × words     mask = word layer
-    ///         └── word layer                carries the glow; holds the glyphs
-    ///             └── GlyphRunLayer × glyphs
+    /// SyncedLyricsLineContentLayer
+    /// └── visual row colour container × rows  mask = that row's glyph mask
+    ///     ├── background colour layer         the un-sung colour
+    ///     ├── LineProgressGradientLayer       the sung colour + feathered edge
+    ///     └── visual row glyph mask
+    ///         └── word colour layer × words   mask = word layer
+    ///             └── word layer              carries the glow; holds the glyphs
+    ///                 └── GlyphRunLayer × glyphs
     /// ```
     ///
     /// Colour and sweep live *outside* the mask; glyph geometry lives *inside* it.
@@ -23,7 +25,37 @@ extension AppleMusicLyrics {
     ///
     /// Built from `sub_100169AC8` (the line), `sub_10018C12C` (the word) and
     /// `sub_10018B2B4` (the emphasis schedule).
+    @Loggable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "InlineKaraoke"
+    )
+    @Signpostable(
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        category: "InlineKaraoke"
+    )
     final class SyncedLyricsLineContentLayer: CALayer {
+        /// The colour and glyph-mask subtree belonging to exactly one wrapped row.
+        /// Keeping the mask row-local prevents a padded gradient from exposing
+        /// glyphs in an adjacent row.
+        private final class VisualRowNode {
+            let colorContainerLayer: NoAnimationLayer
+            let backgroundColorLayer: NoAnimationLayer
+            let glyphMaskContainerLayer: NoAnimationLayer
+            let progressGradientLayer: LineProgressGradientLayer
+
+            init(
+                colorContainerLayer: NoAnimationLayer,
+                backgroundColorLayer: NoAnimationLayer,
+                glyphMaskContainerLayer: NoAnimationLayer,
+                progressGradientLayer: LineProgressGradientLayer
+            ) {
+                self.colorContainerLayer = colorContainerLayer
+                self.backgroundColorLayer = backgroundColorLayer
+                self.glyphMaskContainerLayer = glyphMaskContainerLayer
+                self.progressGradientLayer = progressGradientLayer
+            }
+        }
+
         /// A word, plus the layers standing in for it.
         private final class WordNode {
             let word: LineTextLayout.Word
@@ -68,12 +100,20 @@ extension AppleMusicLyrics {
 
         /// Colour of text that has not been sung yet.
         var unsungColor: CGColor = .init(gray: 1, alpha: 0.5) {
-            didSet { backgroundColorLayer.backgroundColor = unsungColor }
+            didSet {
+                visualRowNodes.forEach { visualRowNode in
+                    visualRowNode.backgroundColorLayer.backgroundColor = unsungColor
+                }
+            }
         }
 
         /// Colour of text that has been sung. Only visible while `isHighlighted`.
         var sungColor: CGColor = .init(gray: 1, alpha: 1) {
-            didSet { progressGradientLayers.forEach { $0.color = sungColor } }
+            didSet {
+                visualRowNodes.forEach { visualRowNode in
+                    visualRowNode.progressGradientLayer.color = sungColor
+                }
+            }
         }
 
         /// While false the sweep is hidden entirely and the line reads as one flat
@@ -81,18 +121,25 @@ extension AppleMusicLyrics {
         var isHighlighted = false {
             didSet {
                 guard isHighlighted != oldValue else { return }
-                progressGradientLayers.forEach { $0.isHidden = !isHighlighted }
+                visualRowNodes.forEach { visualRowNode in
+                    visualRowNode.progressGradientLayer.isHidden = !isHighlighted
+                }
                 if !isHighlighted {
                     resetEmphasis()
                 }
             }
         }
 
+        /// How words with structured timing are emphasized; see
+        /// `StructuredEmphasisPolicy`. Read as each word starts so the hidden
+        /// defaults key can be flipped mid-song. Probes inject a fixed policy.
+        var structuredEmphasisPolicyProvider: () -> StructuredEmphasisPolicy = {
+            StructuredEmphasisPolicy.resolve()
+        }
+
         // MARK: Layers
 
-        private let backgroundColorLayer = NoAnimationLayer()
-        private let glyphMaskContainer = NoAnimationLayer()
-        private var progressGradientLayers: [LineProgressGradientLayer] = []
+        private var visualRowNodes: [VisualRowNode] = []
         private var wordNodes: [WordNode] = []
         private var layout: LineTextLayout?
         private var precedingElapsedTime: TimeInterval?
@@ -102,22 +149,17 @@ extension AppleMusicLyrics {
         private var cumulativeWidthBeforeRow: [CGFloat] = []
         /// How far this layer extends past the text block on every side.
         ///
-        /// This layer's own mask is the glyph tree, and a mask is confined to the
-        /// bounds of the layer it masks — so without room here, everything emphasis
-        /// adds (the lift, the swell, the glow) is cut off flush with the edge of
-        /// the text. Whoever positions this layer has to subtract it, or the text
-        /// lands `textOutset` away from where it was measured to go.
+        /// Each visual row colour container has its own glyph mask, and a mask is
+        /// confined to the bounds of the layer it masks — so without room here,
+        /// everything emphasis adds (the lift, the swell, the glow) is cut off
+        /// flush with the edge of the text. Whoever positions this layer has to
+        /// subtract it, or the text lands `textOutset` away from where it was
+        /// measured to go.
         private(set) var textOutset: CGSize = .zero
 
         override init() {
             super.init()
             isGeometryFlipped = true
-            // The word color layers are children of the mask rather than this
-            // layer, so their coordinate parent needs the same y-down geometry.
-            glyphMaskContainer.isGeometryFlipped = true
-            addSublayer(backgroundColorLayer)
-            mask = glyphMaskContainer
-            backgroundColorLayer.backgroundColor = unsungColor
         }
 
         override init(layer: Any) {
@@ -138,37 +180,61 @@ extension AppleMusicLyrics {
         /// Tear the tree down and build it again for `layout`. Called when the
         /// line, the font, or the available width changes — never per frame.
         func rebuild(with layout: LineTextLayout, contentsScale: CGFloat) {
+            let rebuildInterval = #signpost(
+                .begin,
+                "LineLayerRebuild",
+                "visualRowCount=\(layout.visualLines.count, privacy: .public) wordCount=\(layout.words.count, privacy: .public)"
+            )
+            defer { #signpost(.end, rebuildInterval) }
             resetEmphasis()
             self.layout = layout
 
-            wordNodes.forEach { $0.colorLayer.removeFromSuperlayer() }
-            progressGradientLayers.forEach { $0.removeFromSuperlayer() }
+            visualRowNodes.forEach { visualRowNode in
+                visualRowNode.colorContainerLayer.removeFromSuperlayer()
+            }
             wordNodes = []
-            progressGradientLayers = []
+            visualRowNodes = []
 
-            let rowCount = max(1, layout.visualLineWidths.count)
-            let rowHeight = layout.contentSize.height / CGFloat(rowCount)
+            let rowCount = max(1, layout.visualLines.count)
+            let maximumVisualLineHeight = layout.visualLines.map(\.typographicFrame.height).max()
+                ?? layout.contentSize.height
             let widestWord = layout.words.map(\.frame.width).max() ?? 0
-            let headroom = Self.emphasisHeadroom(forWordSize: CGSize(width: widestWord, height: rowHeight))
+            let headroom = Self.emphasisHeadroom(forWordSize: CGSize(
+                width: widestWord,
+                height: maximumVisualLineHeight
+            ))
             textOutset = CGSize(width: ceil(headroom.width), height: ceil(headroom.height))
 
             bounds = CGRect(origin: .zero, size: CGSize(
                 width: layout.contentSize.width + textOutset.width * 2,
                 height: layout.contentSize.height + textOutset.height * 2
             ))
-            backgroundColorLayer.frame = bounds
-            glyphMaskContainer.frame = bounds
 
             var runningWidth: CGFloat = 0
-            cumulativeWidthBeforeRow = layout.visualLineWidths.map { width in
-                defer { runningWidth += width }
+            cumulativeWidthBeforeRow = layout.visualLines.map { visualLine in
+                defer { runningWidth += visualLine.typographicFrame.width }
                 return runningWidth
             }
 
+            buildVisualRows(for: layout)
             for word in layout.words {
                 wordNodes.append(makeWordNode(for: word, contentsScale: contentsScale))
             }
-            buildProgressGradients(for: layout)
+            let renderedGlyphCount = wordNodes.reduce(0) { partialCount, wordNode in
+                partialCount + wordNode.glyphLayers.count
+            }
+            let renderedWordCount = wordNodes.count
+            #log(
+                .info,
+                """
+                Line layer rebuilt visualRowCount=\(rowCount, privacy: .public) \
+                wordCount=\(renderedWordCount, privacy: .public) \
+                glyphCount=\(renderedGlyphCount, privacy: .public) \
+                contentsScale=\(contentsScale, privacy: .public) \
+                width=\(layout.contentSize.width, privacy: .public) \
+                height=\(layout.contentSize.height, privacy: .public)
+                """
+            )
         }
 
         private func makeWordNode(for word: LineTextLayout.Word, contentsScale: CGFloat) -> WordNode {
@@ -176,13 +242,18 @@ extension AppleMusicLyrics {
             // computes it, then shifted into a box with room to swell and into this
             // layer's outset.
             let headroom = Self.emphasisHeadroom(forWordSize: word.frame.size)
-            let paddedFrame = word.frame
+            let paddedFrameInContentLayer = word.frame
                 .insetBy(dx: -headroom.width, dy: -headroom.height)
                 .offsetBy(dx: textOutset.width, dy: textOutset.height)
+            let visualRowColorContainer = visualRowNodes[word.visualLineIndex].colorContainerLayer
+            let paddedFrameInVisualRow = paddedFrameInContentLayer.offsetBy(
+                dx: -visualRowColorContainer.frame.minX,
+                dy: -visualRowColorContainer.frame.minY
+            )
             let glyphOffset = CGPoint(x: headroom.width, y: headroom.height)
 
             let wordLayer = NoAnimationLayer()
-            wordLayer.frame = CGRect(origin: .zero, size: paddedFrame.size)
+            wordLayer.frame = CGRect(origin: .zero, size: paddedFrameInVisualRow.size)
             wordLayer.contentsScale = contentsScale
             wordLayer.shouldRasterize = true
             wordLayer.rasterizationScale = contentsScale
@@ -213,10 +284,10 @@ extension AppleMusicLyrics {
             // from here. Music uses this layer for its word-level colour crossfade,
             // which the per-character sweep makes unnecessary for us.
             let colorLayer = NoAnimationLayer()
-            colorLayer.frame = paddedFrame
+            colorLayer.frame = paddedFrameInVisualRow
             colorLayer.backgroundColor = CGColor(gray: 1, alpha: 1)
             colorLayer.mask = wordLayer
-            glyphMaskContainer.addSublayer(colorLayer)
+            visualRowNodes[word.visualLineIndex].glyphMaskContainerLayer.addSublayer(colorLayer)
 
             return WordNode(
                 word: word,
@@ -240,26 +311,48 @@ extension AppleMusicLyrics {
             )
         }
 
-        private func buildProgressGradients(for layout: LineTextLayout) {
-            // A gradient per visual row: each row sweeps on its own, so a wrapped
-            // line lights up row after row rather than all at once.
-            let rowHeight = layout.visualLineWidths.isEmpty
-                ? layout.contentSize.height
-                : layout.contentSize.height / CGFloat(layout.visualLineWidths.count)
-            for (rowIndex, rowWidth) in layout.visualLineWidths.enumerated() {
+        private func buildVisualRows(for layout: LineTextLayout) {
+            for visualLine in layout.visualLines {
+                let typographicFrame = visualLine.typographicFrame
+                let colorContainerLayer = NoAnimationLayer()
+                colorContainerLayer.frame = CGRect(
+                    x: typographicFrame.minX,
+                    y: typographicFrame.minY,
+                    width: typographicFrame.width + textOutset.width * 2,
+                    height: typographicFrame.height + textOutset.height * 2
+                )
+                colorContainerLayer.isGeometryFlipped = true
+
+                let backgroundColorLayer = NoAnimationLayer()
+                backgroundColorLayer.frame = colorContainerLayer.bounds
+                backgroundColorLayer.backgroundColor = unsungColor
+                colorContainerLayer.addSublayer(backgroundColorLayer)
+
                 let gradient = LineProgressGradientLayer(
-                    lineWidth: rowWidth,
-                    lineHeight: rowHeight,
+                    lineWidth: typographicFrame.width,
+                    lineHeight: typographicFrame.height,
                     verticalPadding: LyricsSpecs.syllableLift + LyricsSpecs.glowRadius,
                     color: sungColor
                 )
                 gradient.isHidden = !isHighlighted
                 gradient.position = CGPoint(
-                    x: textOutset.width + layout.visualLineLeftEdges[rowIndex] + gradient.originX(forFillEdge: 0),
-                    y: textOutset.height + CGFloat(rowIndex) * rowHeight - gradient.verticalPadding
+                    x: textOutset.width + gradient.originX(forFillEdge: 0),
+                    y: textOutset.height - gradient.verticalPadding
                 )
-                insertSublayer(gradient, above: backgroundColorLayer)
-                progressGradientLayers.append(gradient)
+                colorContainerLayer.addSublayer(gradient)
+
+                let glyphMaskContainerLayer = NoAnimationLayer()
+                glyphMaskContainerLayer.frame = colorContainerLayer.bounds
+                glyphMaskContainerLayer.isGeometryFlipped = true
+                colorContainerLayer.mask = glyphMaskContainerLayer
+
+                addSublayer(colorContainerLayer)
+                visualRowNodes.append(VisualRowNode(
+                    colorContainerLayer: colorContainerLayer,
+                    backgroundColorLayer: backgroundColorLayer,
+                    glyphMaskContainerLayer: glyphMaskContainerLayer,
+                    progressGradientLayer: gradient
+                ))
             }
         }
 
@@ -273,6 +366,28 @@ extension AppleMusicLyrics {
         /// comparisons even at 120Hz.
         func update(elapsedTime: TimeInterval, fillFraction: CGFloat) {
             guard let layout, isHighlighted else { return }
+            if FramePerformanceDiagnosticsPolicy.detailedFrameSignpostingIsEnabled {
+                #signpostInterval("KaraokeSweepUpdate") {
+                    updateSweepAndEmphasis(
+                        layout: layout,
+                        elapsedTime: elapsedTime,
+                        fillFraction: fillFraction
+                    )
+                }
+            } else {
+                updateSweepAndEmphasis(
+                    layout: layout,
+                    elapsedTime: elapsedTime,
+                    fillFraction: fillFraction
+                )
+            }
+        }
+
+        private func updateSweepAndEmphasis(
+            layout: LineTextLayout,
+            elapsedTime: TimeInterval,
+            fillFraction: CGFloat
+        ) {
             if shouldSynchronizeEmphasisState(forElapsedTime: elapsedTime) {
                 synchronizeEmphasisState(forElapsedTime: elapsedTime)
             }
@@ -288,6 +403,21 @@ extension AppleMusicLyrics {
         }
 
         private func synchronizeEmphasisState(forElapsedTime elapsedTime: TimeInterval) {
+            let previousElapsedTime = precedingElapsedTime ?? -1
+            let synchronizedWordCount = wordNodes.count
+            #log(
+                .info,
+                """
+                Emphasis state synchronized elapsedTime=\(elapsedTime, privacy: .public) \
+                previousElapsedTime=\(previousElapsedTime, privacy: .public) \
+                wordCount=\(synchronizedWordCount, privacy: .public)
+                """
+            )
+            #signpost(
+                .event,
+                "EmphasisStateSynchronized",
+                "elapsedTime=\(elapsedTime, privacy: .public)"
+            )
             resetEmphasis()
             for node in wordNodes {
                 if let timeRange = node.word.timeRange,
@@ -303,13 +433,15 @@ extension AppleMusicLyrics {
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            for (rowIndex, gradient) in progressGradientLayers.enumerated() {
-                let rowWidth = layout.visualLineWidths[rowIndex]
+            for (rowIndex, visualRowNode) in visualRowNodes.enumerated() {
+                let gradient = visualRowNode.progressGradientLayer
+                let typographicFrame = layout.visualLines[rowIndex].typographicFrame
+                let rowWidth = typographicFrame.width
                 let filledInRow = min(max(0, filledWidth - cumulativeWidthBeforeRow[rowIndex]), rowWidth)
                 let originX = filledInRow >= rowWidth
                     ? gradient.originXForCompletelyFilled()
                     : gradient.originX(forFillEdge: filledInRow)
-                gradient.position.x = textOutset.width + layout.visualLineLeftEdges[rowIndex] + originX
+                gradient.position.x = textOutset.width + originX
             }
             CATransaction.commit()
         }
@@ -333,17 +465,38 @@ extension AppleMusicLyrics {
             let glyphCount = node.glyphLayers.count
             guard glyphCount > 0 else { return }
             let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+            let structuredEmphasisPolicy = structuredEmphasisPolicyProvider()
             let plan = WordEmphasisPlan.make(
                 wordDuration: duration,
                 wordLength: node.word.characterRange.count,
                 renderedGlyphCount: glyphCount,
                 timingGlyphCount: node.word.emphasisGlyphCount,
                 languageIdentifier: layout?.languageIdentifier,
-                timingSource: node.word.timingSource
+                timingSource: node.word.timingSource,
+                structuredEmphasisPolicy: structuredEmphasisPolicy
             )
             let spring = SpringTimingParameters(
                 dampingRatio: LyricsSpecs.emphasisDampingRatio,
                 period: plan.springPeriod
+            )
+            let timingSourceName = node.word.timingSource == .synchronized ? "synchronized" : "inferred"
+            #log(
+                .debug,
+                """
+                Word emphasis scheduled characterCount=\(node.word.characterRange.count, privacy: .public) \
+                glyphCount=\(glyphCount, privacy: .public) \
+                duration=\(duration, privacy: .public) \
+                timingSource=\(timingSourceName, privacy: .public) \
+                policy=\(structuredEmphasisPolicy.rawValue, privacy: .public) \
+                scale=\(plan.scale, privacy: .public) \
+                springPeriod=\(plan.springPeriod, privacy: .public) \
+                glowOpacity=\(plan.glowOpacity, privacy: .public)
+                """
+            )
+            #signpost(
+                .event,
+                "WordEmphasisScheduled",
+                "glyphCount=\(glyphCount, privacy: .public) duration=\(duration, privacy: .public)"
             )
 
             for (glyphIndex, glyphLayer) in node.glyphLayers.enumerated() {
@@ -464,6 +617,14 @@ extension AppleMusicLyrics {
         /// Called when the line stops being the active one, or is recycled for a
         /// different lyric.
         func resetEmphasis() {
+            if wordNodes.contains(where: { $0.isEmphasisScheduled }) {
+                let emphasisWordCount = wordNodes.count
+                #log(
+                    .debug,
+                    "Emphasis reset wordCount=\(emphasisWordCount, privacy: .public)"
+                )
+                #signpost(.event, "EmphasisReset")
+            }
             precedingElapsedTime = nil
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -481,9 +642,9 @@ extension AppleMusicLyrics {
                     glyphLayer.setAffineTransform(.identity)
                 }
             }
-            for (rowIndex, gradient) in progressGradientLayers.enumerated() {
-                let leftEdge = layout?.visualLineLeftEdges[rowIndex] ?? 0
-                gradient.position.x = textOutset.width + leftEdge + gradient.originX(forFillEdge: 0)
+            for visualRowNode in visualRowNodes {
+                let gradient = visualRowNode.progressGradientLayer
+                gradient.position.x = textOutset.width + gradient.originX(forFillEdge: 0)
             }
             CATransaction.commit()
         }
