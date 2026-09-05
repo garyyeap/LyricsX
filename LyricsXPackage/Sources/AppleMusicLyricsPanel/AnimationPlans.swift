@@ -100,20 +100,18 @@ extension AppleMusicLyrics {
     enum LineTransitionPlan {
         static let selectedLineBaselineViewportFraction: CGFloat = 0.4
         /// `LyricsSpecs.lineChangeSpringTimingParametersValues` as Music 26.6's
-        /// `LyricsSpecs` initializer (`sub_1001D1C28`) fills it in; neither the
-        /// pretty-mode closure nor Music's own overrides touch it. Every visible
-        /// row rides this spring during an Apple Music line change: damping
-        /// ratio ≈ 0.9, natural period ≈ 0.63 s.
+        /// `LyricsSpecs` initializer (`sub_1001D1C28`) fills it in. This is the
+        /// fallback for line-timed lyrics or a missing sung gap; timedWords uses
+        /// `automaticSpringTiming(sungGap:)` instead.
         static let normalSpringMass: CGFloat = 1
         static let normalSpringStiffness: CGFloat = 100
         static let normalSpringDamping: CGFloat = 18
         /// `LyricsSpecs.lineDelay` in the full-window (pretty) mode; the sidebar
-        /// uses 0.02. `sub_1001DCBD4` delays row `n` by `lineDelay × n` counted
-        /// from the top of the viewport.
+        /// uses 0.02. `sub_1001DCBD4` uses `max(rowIndex - 1, 0)`, so the first
+        /// two participating rows start together.
         static let appleMusicLineDelay: TimeInterval = 0.05
         /// When the lyrics move backwards the same function hands the delays out
-        /// from the bottom row up and halves them — its own debug log calls this
-        /// "the duration hack".
+        /// from the bottom row up and halves them.
         static let appleMusicBackwardLineDelayScale: Double = 0.5
         static let interactiveSpringMass: CGFloat = 2
         static let interactiveSpringStiffness: CGFloat = 260
@@ -127,6 +125,24 @@ extension AppleMusicLyrics {
         static let rapidTransitionThreshold: TimeInterval = 0.4
         static let rapidSettleSpringPeriod: TimeInterval = 0.5
         static let rapidSettleDampingRatio: CGFloat = 1
+
+        /// Music's timedWords dispatch (`sub_1001E0994`) passes the gap between
+        /// the next line's start and the previous selected line's sung end to
+        /// `sub_1001D1A10`. The clamp handles overlapping vocals as well as rests.
+        static func automaticSpringTiming(sungGap: TimeInterval?) -> SpringTimingParameters {
+            guard let sungGap, sungGap.isFinite else {
+                return SpringTimingParameters(
+                    mass: normalSpringMass,
+                    stiffness: normalSpringStiffness,
+                    damping: normalSpringDamping
+                )
+            }
+            let interpolationFraction = min(max((sungGap - 0.2) / 0.55, 0), 1)
+            return SpringTimingParameters(
+                dampingRatio: CGFloat((1 - interpolationFraction) * 0.12 + 0.78),
+                period: interpolationFraction * 0.27 + 0.48
+            )
+        }
 
         /// Apple Music's `.topRelative` value positions the text baseline at a
         /// percentage of the visible card height. Our row frame also includes its

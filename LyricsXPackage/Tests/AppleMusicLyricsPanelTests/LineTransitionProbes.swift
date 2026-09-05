@@ -123,7 +123,116 @@ struct LineTransitionProbes {
 
     // MARK: Apple Music 26.6 cascade
 
-    @Test func appleMusicCascadeSpringsEveryRowCrossingTheViewportWithFiftyMillisecondDelays() throws {
+    @Test(arguments: [
+        (gap: -0.25, stiffness: 171.3472986300236, damping: 23.56194490192345),
+        (gap: 0.2, stiffness: 171.3472986300236, damping: 23.56194490192345),
+        (gap: 0.5, stiffness: 100.33372253995483, damping: 16.718736556495248),
+        (gap: 0.75, stiffness: 70.18385351885765, damping: 13.069025438933538),
+        (gap: 2.0, stiffness: 70.18385351885765, damping: 13.069025438933538),
+    ])
+    func appleMusicWordTimedCascadeUsesTheGapAfterThePreviousSungLine(
+        sample: (gap: TimeInterval, stiffness: Double, damping: Double)
+    ) throws {
+        let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
+        for originalIndex in lyrics.lines.indices {
+            lyrics.lines[originalIndex].attachments.timetag = .init(
+                tags: [.init(index: 0, time: 0), .init(index: 6, time: 0.5)],
+                duration: 4 - sample.gap
+            )
+        }
+        let (container, window) = Self.makeMountedContainer(variant: .appleMusic26)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
+
+        let scrollView = try Self.scrollView(of: container)
+        let springs = Self.linePositionSprings(in: scrollView)
+        #expect(!springs.isEmpty)
+        // Independent coefficients recovered from Music 26.6's timedWords path.
+        for spring in springs {
+            #expect(abs(Double(spring.mass) - 1) < 0.001)
+            #expect(abs(Double(spring.stiffness) - sample.stiffness) < 0.001)
+            #expect(abs(Double(spring.damping) - sample.damping) < 0.001)
+        }
+    }
+
+    @Test func appleMusicCascadePrefersTheStructuredSungEndOverTheInlineFallback() throws {
+        let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
+        lyrics.lines[2].attachments.synchronizedTextTiming = .init(
+            words: [.init(characterRange: 0 ..< 5, timeRange: 0 ..< 3.25)],
+            duration: 3.25
+        )
+        lyrics.lines[2].attachments.timetag = .init(
+            tags: [.init(index: 0, time: 0)],
+            duration: 3.8
+        )
+        let (container, window) = Self.makeMountedContainer(variant: .appleMusic26)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
+
+        let spring = try #require(Self.linePositionSprings(in: Self.scrollView(of: container)).first)
+        #expect(abs(Double(spring.stiffness) - 70.18385351885765) < 0.001)
+        #expect(abs(Double(spring.damping) - 13.069025438933538) < 0.001)
+    }
+
+    @Test(arguments: [true, false])
+    func appleMusicCascadeKeepsTheFallbackWhenWordTimingOrTheSungEndIsMissing(hasWordTiming: Bool) throws {
+        let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
+        lyrics.lines[2].attachments.timetag = .init(
+            tags: hasWordTiming ? [.init(index: 0, time: 0)] : [],
+            duration: hasWordTiming ? nil : 3.25
+        )
+        let (container, window) = Self.makeMountedContainer(variant: .appleMusic26)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
+
+        let spring = try #require(Self.linePositionSprings(in: Self.scrollView(of: container)).first)
+        Self.expectAppleMusicLineChangeSpring(spring)
+    }
+
+    @Test func appleMusicWordTimedCatchUpUsesTheLastDisplayedLineRatherThanASkippedLine() async throws {
+        let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
+        for originalIndex in lyrics.lines.indices {
+            lyrics.lines[originalIndex].attachments.timetag = .init(
+                tags: [.init(index: 0, time: 0)],
+                duration: 3.8
+            )
+        }
+        let (container, window) = Self.makeMountedContainer(variant: .appleMusic26)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        Self.advanceHighlight(container, lyrics: lyrics, through: [2, 3])
+        let scrollView = try Self.scrollView(of: container)
+        let springs = Self.linePositionSprings(in: scrollView)
+        let lastSpringCompletionTime = try #require(springs.map { $0.beginTime + $0.duration }.max())
+        Self.advanceHighlight(container, lyrics: lyrics, through: [4, 5])
+        #expect(Self.highlightedOriginalIndex(in: scrollView) == 3)
+
+        try await Task.sleep(seconds: max(0, lastSpringCompletionTime - CACurrentMediaTime()) + 0.3)
+
+        #expect(Self.highlightedOriginalIndex(in: scrollView) == 5)
+        let spring = try #require(Self.linePositionSprings(in: scrollView).first)
+        // Line 3 ended at 15.8 s; line 5 starts at 20 s. Using skipped line 4
+        // would incorrectly choose the short-gap spring for only 0.2 s of rest.
+        #expect(abs(Double(spring.stiffness) - 70.18385351885765) < 0.001)
+        #expect(abs(Double(spring.damping) - 13.069025438933538) < 0.001)
+    }
+
+    @Test func appleMusicCascadeStartsTheFirstTwoRowsTogetherAndPreservesTheirPositions() throws {
         let lyrics = try #require(Self.makeLyrics(), "fixture lyrics failed to parse")
         let (container, window) = Self.makeMountedContainer(variant: .appleMusic26)
         defer {
@@ -134,6 +243,9 @@ struct LineTransitionProbes {
         Self.advanceHighlight(container, lyrics: lyrics, through: [2])
         let scrollView = try Self.scrollView(of: container)
         let previousViewport = scrollView.contentView.bounds
+        let previousRowPositions = Dictionary(uniqueKeysWithValues: Self.lineViews(in: scrollView).compactMap { lineView in
+            lineView.layer.map { (lineView.originalIndex, $0.position.y) }
+        })
         Self.advanceHighlight(container, lyrics: lyrics, through: [3])
         let travelledViewport = previousViewport.union(scrollView.contentView.bounds)
         let expectedRows = Self.lineViews(in: scrollView).filter { $0.frame.intersects(travelledViewport) }
@@ -143,16 +255,26 @@ struct LineTransitionProbes {
         #expect(expectedRows.count >= 8, "an 800 point viewport should show most of the twelve fixture lines")
         #expect(Set(springsByRow.map(\.lineView.originalIndex)) == Set(expectedRows.map(\.originalIndex)))
         #expect(Self.linePositionAnimationCount(in: scrollView) == expectedRows.count)
-        for (_, spring) in springsByRow {
+        for (lineView, spring) in springsByRow {
             Self.expectAppleMusicLineChangeSpring(spring)
             let startingPosition = try CGFloat(#require(spring.fromValue as? CGFloat))
             let endingPosition = try CGFloat(#require(spring.toValue as? CGFloat))
+            let previousPosition = try #require(previousRowPositions[lineView.originalIndex])
+            let currentViewportOrigin = scrollView.contentView.bounds.origin.y
+            #expect(abs((startingPosition - currentViewportOrigin) - (previousPosition - previousViewport.origin.y)) < 0.001)
+            #expect(endingPosition == previousPosition, "the first row's scroll compensation must not be applied twice")
+            #expect(lineView.layer?.position.y == previousPosition, "AppKit keeps ownership of the model position")
             #expect(abs(startingPosition - endingPosition) > 1)
         }
         let beginTimesTopToBottom = springsByRow.map(\.spring.beginTime)
-        #expect(zip(beginTimesTopToBottom.dropFirst(), beginTimesTopToBottom).allSatisfy { lowerRowTime, upperRowTime in
+        try #require(beginTimesTopToBottom.count >= 2)
+        #expect(
+            abs(beginTimesTopToBottom[1] - beginTimesTopToBottom[0]) < 0.005,
+            "Music starts the first two participating rows together"
+        )
+        #expect(zip(beginTimesTopToBottom.dropFirst(2), beginTimesTopToBottom.dropFirst()).allSatisfy { lowerRowTime, upperRowTime in
             abs((lowerRowTime - upperRowTime) - 0.05) < 0.005
-        }, "each row starts 50 ms after the one above it")
+        }, "subsequent rows start 50 ms apart")
     }
 
     @Test func appleMusicCascadeReversesAndHalvesTheDelaysWhenTheLyricsMoveBackwards() throws {
@@ -171,10 +293,15 @@ struct LineTransitionProbes {
 
         let springsByRow = Self.linePositionSpringsByRow(in: scrollView)
         #expect(springsByRow.count >= 8)
-        let beginTimesTopToBottom = springsByRow.map(\.spring.beginTime)
-        #expect(zip(beginTimesTopToBottom.dropFirst(), beginTimesTopToBottom).allSatisfy { lowerRowTime, upperRowTime in
+        let beginTimesBottomToTop = Array(springsByRow.map(\.spring.beginTime).reversed())
+        try #require(beginTimesBottomToTop.count >= 2)
+        #expect(
+            abs(beginTimesBottomToTop[1] - beginTimesBottomToTop[0]) < 0.005,
+            "moving backwards the bottom two rows lead together"
+        )
+        #expect(zip(beginTimesBottomToTop.dropFirst(2), beginTimesBottomToTop.dropFirst()).allSatisfy { upperRowTime, lowerRowTime in
             abs((upperRowTime - lowerRowTime) - 0.025) < 0.005
-        }, "moving backwards the bottom row leads and each row above it waits 25 ms longer")
+        }, "subsequent rows wait 25 ms longer going upwards")
     }
 
     @Test func appleMusicCascadeHoldsANewLineUntilItSettlesThenCatchesUp() async throws {
@@ -198,9 +325,8 @@ struct LineTransitionProbes {
             current.spring.beginTime == previous.spring.beginTime
         }, "the held line change must not restart the running cascade")
 
-        let lineChangeSpring = AppleMusicLyrics.SpringTimingParameters(mass: 1, stiffness: 100, damping: 18)
-        let slowestRowDelay = 0.05 * Double(max(0, springsWhileInFlight.count - 1))
-        try await Task.sleep(seconds: lineChangeSpring.settlingDuration + slowestRowDelay + 0.3)
+        let lastSpringCompletionTime = try #require(springsWhileInFlight.map { $0.spring.beginTime + $0.spring.duration }.max())
+        try await Task.sleep(seconds: max(0, lastSpringCompletionTime - CACurrentMediaTime()) + 0.3)
 
         #expect(Self.highlightedOriginalIndex(in: scrollView) == 4, "the held line is applied once the cascade settles")
         #expect(scrollView.contentView.bounds.origin.y > clipOriginForLineThree)

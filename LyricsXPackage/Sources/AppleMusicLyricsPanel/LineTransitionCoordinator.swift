@@ -15,8 +15,9 @@ extension AppleMusicLyrics {
     }
 
     /// Apple Music 26.6's own line change (`LineCascadeVariant.appleMusic26`):
-    /// one spring per row that crosses the viewport, every row on the same
-    /// spring, delayed by `lineDelay` per row counted from the top.
+    /// one spring per row that crosses the viewport, with the curve selected for
+    /// this transition. The leading two rows start together, followed by the
+    /// remaining rows at `lineDelay` intervals.
     struct UniformLineCascadeConfiguration {
         let springTiming: SpringTimingParameters
         let lineDelay: TimeInterval
@@ -38,10 +39,12 @@ extension AppleMusicLyrics {
     /// single owner of every model frame.
     @MainActor
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LineTransition"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LineTransition"
     )
@@ -210,8 +213,8 @@ extension AppleMusicLyrics {
         }
 
         /// Apple Music 26.6's line change. `sub_1001DCBD4` builds one
-        /// `AnimationDescriptor` per visible row, all on the fixed line-change
-        /// spring, delayed by `lineDelay × rowIndex` from the top of the viewport
+        /// `AnimationDescriptor` per visible row, all on the selected line-change
+        /// spring, delayed by `lineDelay × max(rowIndex - 1, 0)` from the top
         /// (from the bottom, at half the delay, when moving backwards), and only
         /// commits the new clip offset once the last row has settled. The rows
         /// considered are every row that crosses either the old or the new
@@ -288,6 +291,7 @@ extension AppleMusicLyrics {
                 : configuration.lineDelay * configuration.backwardLineDelayScale
             let lastLineOffset = participatingLineViews.count - 1
             let currentMediaTime = CACurrentMediaTime()
+            var settlingDelay: TimeInterval = 0
             for (lineOffset, lineView) in participatingLineViews.enumerated() {
                 guard let lineLayer = lineView.layer,
                       let visibleLineVerticalPosition = visibleLineVerticalPositions[ObjectIdentifier(lineLayer)]
@@ -295,19 +299,23 @@ extension AppleMusicLyrics {
                     continue
                 }
                 let delayIndex = movesForward ? lineOffset : lastLineOffset - lineOffset
+                let animationDelay = lineDelay * TimeInterval(max(0, delayIndex - 1))
                 let animation = configuration.springTiming.makeAnimation(keyPath: "position.y")
+                // Music offsets the first target frame, then lays subsequent
+                // frames out below it. Compensating each start is equivalent
+                // with our clip already at its destination; do not offset the
+                // first row a second time.
                 animation.fromValue = visibleLineVerticalPosition + compensatingDisplacement
                 animation.toValue = lineLayer.position.y
                 animation.beginTime = lineLayer.convertTime(currentMediaTime, from: nil)
-                    + lineDelay * TimeInterval(delayIndex)
+                    + animationDelay
                 configureLineAnimation(animation)
                 lineLayer.add(animation, forKey: Self.linePositionAnimationKey)
+                settlingDelay = max(settlingDelay, animationDelay + animation.duration)
             }
             CATransaction.commit()
 
             animatedLineLayers = participatingLineViews.compactMap(\.layer)
-            let settlingDelay = lineDelay * TimeInterval(max(0, lastLineOffset))
-                + configuration.springTiming.settlingDuration
             let settlement = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.pendingCascadeSettlement = nil

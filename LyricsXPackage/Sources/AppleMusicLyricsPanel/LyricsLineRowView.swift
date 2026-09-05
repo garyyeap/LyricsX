@@ -19,10 +19,12 @@ extension AppleMusicLyrics {
     /// sung/un-sung gradient sweeps *outside* it, and a single drawing pass cannot
     /// separate the two. Everything visual now lives in the layer tree.
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LyricsLine"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LyricsLine"
     )

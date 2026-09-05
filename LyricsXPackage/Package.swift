@@ -94,7 +94,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/Mx-Iris/FrameworkToolbox",
-            from: "0.10.0"
+            from: "0.12.0"
         ),
         .package(
             url: "https://github.com/Mx-Iris/UIFoundation",

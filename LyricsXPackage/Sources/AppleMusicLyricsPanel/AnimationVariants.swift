@@ -9,9 +9,9 @@ extension AppleMusicLyrics {
     /// side by side without a rebuild. The key is read on every line change, so
     /// `defaults write` takes effect on the next advance.
     enum LineCascadeVariant: String, CaseIterable, Sendable {
-        /// Apple Music 26.6's own cascade: every visible row springs with the
-        /// fixed line-change spring, delayed by `lineDelay` × its index from the
-        /// top, and a new selection waits until the cascade has settled.
+        /// Apple Music 26.6's cascade: word-timed lyrics choose a spring from the
+        /// sung gap, otherwise using the fixed fallback. The leading two rows
+        /// start together; a new selection waits until the cascade has settled.
         case appleMusic26
         /// The cascade restored from the panel's earlier SwiftUI renderer: three
         /// rows above the selection ease into place, the selection and five rows

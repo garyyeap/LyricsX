@@ -26,10 +26,12 @@ extension AppleMusicLyrics {
     /// Built from `sub_100169AC8` (the line), `sub_10018C12C` (the word) and
     /// `sub_10018B2B4` (the emphasis schedule).
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "InlineKaraoke"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "InlineKaraoke"
     )

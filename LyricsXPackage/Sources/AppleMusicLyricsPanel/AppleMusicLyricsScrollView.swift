@@ -9,10 +9,12 @@ import OSToolbox
 
 extension AppleMusicLyrics {
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LyricsFrame"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "LyricsFrame"
     )
@@ -32,6 +34,7 @@ extension AppleMusicLyrics {
         // MARK: State
 
         private var lyrics: Lyrics?
+        private var hasWordTiming = false
         private var enabledLineViews: [SyncedLyricsLineView] = []
         private var lineViewByOriginalIndex: [Int: SyncedLyricsLineView] = [:]
         private var enabledOriginalIndices: [Int] = []
@@ -307,9 +310,13 @@ extension AppleMusicLyrics {
             enabledLineViews.removeAll()
             lineViewByOriginalIndex.removeAll()
             enabledOriginalIndices.removeAll()
+            hasWordTiming = false
 
             guard let lyrics else { return }
 
+            hasWordTiming = lyrics.lines.contains { line in
+                line.synchronizedTextTiming != nil || line.attachments.timetag?.tags.isEmpty == false
+            }
             var enabledPosition = 0
             for (originalIndex, line) in lyrics.lines.enumerated() where line.enabled && !line.content.isEmpty {
                 let view = SyncedLyricsLineView()
@@ -452,6 +459,7 @@ extension AppleMusicLyrics {
 
         private func applyHighlight(originalIndex: Int?, animated: Bool) {
             deferredHighlightedOriginalIndex = nil
+            let previousHighlightedOriginalIndex = highlightedOriginalIndex
             if let old = highlightedOriginalIndex, let view = lineViewByOriginalIndex[old] {
                 view.setHighlighted(false)
             }
@@ -466,7 +474,7 @@ extension AppleMusicLyrics {
             let isFollowing = interactionState?.isFollowing ?? true
             if isFollowing, let new = originalIndex {
                 if animated, window != nil {
-                    advanceFollowing(toOriginalIndex: new)
+                    advanceFollowing(toOriginalIndex: new, fromOriginalIndex: previousHighlightedOriginalIndex)
                 } else {
                     centerLine(originalIndex: new, animated: false)
                 }
@@ -478,7 +486,7 @@ extension AppleMusicLyrics {
         /// jump snaps instantly; otherwise the selected cascade variant runs. The
         /// legacy variant additionally settles the clip as a unit when highlights
         /// arrive in rapid succession.
-        private func advanceFollowing(toOriginalIndex originalIndex: Int) {
+        private func advanceFollowing(toOriginalIndex originalIndex: Int, fromOriginalIndex previousOriginalIndex: Int?) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
             let newPosition = view.enabledPosition
             let usesInteractiveSpring = pendingInteractiveTargetOriginalIndex == originalIndex
@@ -504,7 +512,7 @@ extension AppleMusicLyrics {
                 switch variant {
                 case .appleMusic26:
                     transitionKind = "appleMusicCascade"
-                    cascadeVisibleLines(originalIndex: originalIndex)
+                    cascadeVisibleLines(originalIndex: originalIndex, previousOriginalIndex: previousOriginalIndex)
                 case .legacySwiftUI where isRapid:
                     transitionKind = "rapidSettle"
                     settleLine(originalIndex: originalIndex)
@@ -585,13 +593,11 @@ extension AppleMusicLyrics {
 
         // MARK: Scrolling
 
-        private func cascadeVisibleLines(originalIndex: Int) {
+        private func cascadeVisibleLines(originalIndex: Int, previousOriginalIndex: Int?) {
             guard let view = lineViewByOriginalIndex[originalIndex] else { return }
             let configuration = UniformLineCascadeConfiguration(
-                springTiming: SpringTimingParameters(
-                    mass: LineTransitionPlan.normalSpringMass,
-                    stiffness: LineTransitionPlan.normalSpringStiffness,
-                    damping: LineTransitionPlan.normalSpringDamping
+                springTiming: LineTransitionPlan.automaticSpringTiming(
+                    sungGap: lineChangeSungGap(from: previousOriginalIndex, to: originalIndex)
                 ),
                 lineDelay: LineTransitionPlan.appleMusicLineDelay,
                 backwardLineDelayScale: LineTransitionPlan.appleMusicBackwardLineDelayScale
@@ -605,6 +611,24 @@ extension AppleMusicLyrics {
             ) { [weak self] in
                 self?.applyDeferredHighlightIfNeeded()
             }
+        }
+
+        private func lineChangeSungGap(from previousOriginalIndex: Int?, to originalIndex: Int) -> TimeInterval? {
+            guard hasWordTiming,
+                  let lyrics,
+                  let previousOriginalIndex,
+                  lyrics.lines.indices.contains(previousOriginalIndex),
+                  lyrics.lines.indices.contains(originalIndex),
+                  let previousSungDuration = lyrics.lines[previousOriginalIndex].timetagDuration,
+                  previousSungDuration.isFinite,
+                  previousSungDuration >= 0
+            else {
+                return nil
+            }
+            // Use the line that was actually selected, including deferred catch-up.
+            // Inferring an end from the next start would erase every sung gap.
+            let previousSungEnd = lyrics.lines[previousOriginalIndex].position + previousSungDuration
+            return lyrics.lines[originalIndex].position - previousSungEnd
         }
 
         private func cascadeLine(originalIndex: Int) {

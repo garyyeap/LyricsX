@@ -10,7 +10,8 @@
 
 主歌词现在走两条明确的数据路径：Apple Music TTML 保留真实的 word/syllable range 与结束时间，
 按 Apple Music 26.6 的 factor、stagger 和 contextual blur 执行动画；行间切换默认走 Apple Music 26.6
-的逐行错峰 cascade，旧的 SwiftUI cascade 保留为可切换的第二档。没有结构化数据的其他歌词继续走原来的
+的逐行错峰 cascade，并按唱句间隙选择逐字歌词的动态弹簧；旧的 SwiftUI cascade 保留为可切换的第二档。
+没有结构化数据的其他歌词在行内继续走原来的
 phrase 推断，不伪造不存在的层级。行 layer 像 Apple Music 一样常开光栅化，这是全屏切行不再掉到 30 FPS
 的前提。
 
@@ -150,19 +151,58 @@ display link → `SyncedLyricsManager` 选行 → 代理 `animate(to:)`（`sub_1
 
 - 对每个可见行创建一个 `AnimationDescriptor`，`SyncedLyricsViewController.sub_10015D1B0` 再把每个
   descriptor 变成一个带 delay 的 `LayerPropertyAnimator`。
-- 曲线是 `LyricsSpecs.lineChangeSpringTimingParametersValues`：`sub_1001D1C28` 默认填
-  mass 1 / stiffness 100 / damping 18，Music 侧不覆盖。阻尼比约 0.9，固有周期约 0.63 秒。
-- delay 是 `specs.lineDelay × 行序号`，从视口顶部往下数。全屏 pretty 模式 `lineDelay = 0.05` 秒，
-  侧栏模式 0.02 秒。往回滚时序号反转且 delay 减半，二进制里的调试字符串叫它 "duration hack"。
+- 普通逐行歌词、或者缺少换行时间间隔时，曲线取 `LyricsSpecs.lineChangeSpringTimingParametersValues`：
+  `sub_1001D1C28` 默认填 mass 1 / stiffness 100 / damping 18，阻尼比 0.9，固有周期约 0.63 秒。
+  **2026-09-05 补充核对**：`sub_1001E0994` 在 `lyrics.type == timedWords` 时还会调用
+  `sub_1001D1A10`，根据唱句间隙选择动态弹簧。此前从 specs 默认值推导「所有行都固定用 1/100/18」
+  遗漏了这个分支；仅检查配置是否被覆盖，不能证明消费端不另选曲线。
+- delay 是 `specs.lineDelay × max(行序号 - 1, 0)`，序号从 0 开始。全屏 pretty 模式
+  `lineDelay = 0.05` 秒，侧栏模式 0.02 秒。往回滚时先反转序号，再减一并截到 0，delay 减半。
+  向前的延迟序列为 `0, 0, 50, 100, ... ms`，向后从底部开始为 `0, 0, 25, 50, ... ms`。
+  减一与非负截断分别在 `0x1001DE760`、`0x1001DE8C4` 的汇编中确认；此前把回滚逻辑称为
+  "duration hack" 的注释不准确，该日志不在回滚延迟分支。
 - 动画对象是每行 `NSView` 自己的 frame（`sub_1001DF214` 在 change block 里 `setFrame:`），clip 在整个
   cascade 期间不动；最后一个 descriptor 的 completion（`sub_1001DF460`）才把 `contentView.bounds` 设到
   新 offset 并复位各行 frame。
 - 有切行动画在飞时，`displayLinkFired` → `sub_1001D8C08` 直接跳过管理器更新，不选新行；动画结束后
-  一次性追上。不存在第二套高阻尼 spring。
+  一次性追上。逐字高亮的进度更新仍继续执行。
 - 选中态切换用 `custom((0.17, 0), (0.83, 1), 0.28 s)`；blur 半径仍是下文的 0.12 秒曲线。
 
 pretty 模式的 `selectedLinePosition` 是 Music 用自己的 `activeBaseline` 锚点构造的 `.center(rect:)`，
 本项目仍沿用上面校准出的 40% baseline，没有重算。
+
+### 逐字歌词的换行弹簧为什么不能只读 specs
+
+`SyncedLyricsManager` 的 `sub_1001D4DE8` 在 `0x1001D54C4` 读取目标行的开始时间，在
+`0x1001D54F8` 读取此前选中行的结束时间，`0x1001D573C` 相减后经 `sub_1001D5CA0` 传给代理。
+这不是整行持续时间，也不是两次显示回调之间经过的墙钟时间：
+
+```text
+sungGap = nextLine.startTime - previousSelectedLine.endTime
+fraction = clamp((sungGap - 0.2) / 0.55, 0, 1)
+dampingRatio = (1 - fraction) * 0.12 + 0.78
+period = fraction * 0.27 + 0.48
+```
+
+`sub_1001662D4` 再把阻尼比与周期转为 mass、stiffness、damping；`sub_100162B3C` 原样交给
+`CASpringAnimation`，动画长度取它自己的 `settlingDuration`。上述分支与公式均已对照汇编。
+
+| 唱句间隙 | 阻尼比 | 固有周期 | 越过目标位置的理论幅度 |
+|---|---|---|---|
+| ≤ 0.2 秒，含重叠唱句 | 0.9 | 0.48 秒 | 位移的约 0.15% |
+| 0.5 秒 | 约 0.83455 | 约 0.62727 秒 | 约 0.86% |
+| ≥ 0.75 秒 | 0.78 | 0.75 秒 | 约 1.99% |
+| 固定回退 1/100/18 | 0.9 | 约 0.62832 秒 | 约 0.15% |
+| 旧 Codex 参数 | 0.725 | 0.6 秒 | 约 3.66% |
+
+这些是零初速度弹簧的理论曲线，不是录屏或帧率测量。旧 Codex 参数确实更弹，但不能把恢复它等同于
+恢复 Apple Music 的精确分支。
+
+本项目在重建歌词行时判断是否有结构化 word timing 或非空 inline time tags，并在实际换行时使用上一条
+**真正显示过的选中行**计算间隙。结束时间优先取有效 `SynchronizedTextTiming.duration`，再取 inline
+duration；缺少结束时间、无逐字数据或非有限时间量时，回退到固定弹簧。不能用下一行开始时间推算上一行
+结束时间，否则所有间隙都会被人为抹成 0。延后追赶跳过几行时，也不能拿目标行在数组中的前一行代替
+真正的上一选中行。
 
 ### 本项目的两档 cascade
 
@@ -172,8 +212,8 @@ pretty 模式的 `selectedLinePosition` 是 Music 用自己的 `activeBaseline` 
 | | `appleMusic26`（默认） | `legacySwiftUI` |
 |---|---|---|
 | 参与行 | 与旧视口或新视口相交的全部行，从上到下 | 上方 3 行 + 选中行及下方 5 行 |
-| 曲线 | 每行 spring mass 1 / stiffness 100 / damping 18 | 上方 0.5 秒 ease-in-out；其余 period 0.6 / 阻尼比 0.725 |
-| delay | 0.05 秒 × 序号；回滚时序号反转并减半 | 0.08 秒 × (序号 + 2) |
+| 曲线 | 逐字歌词按唱句间隙选动态 spring；信息不足时用 1/100/18 | 上方 0.5 秒 ease-in-out；其余 period 0.6 / 阻尼比 0.725 |
+| delay | 0.05 秒 × max(序号 - 1, 0)；回滚时先反转序号、再减一截断并减半 | 0.08 秒 × (序号 + 2) |
 | 快速切行 | cascade 未 settle 前不接受新选行，settle 后追上 | 0.4 秒内再次切行改为 period 0.5 / 阻尼比 1 的 clip settle |
 
 两档都由 `LineTransitionCoordinator` 执行，顺序与 Apple Music 相反但视觉等价，而且不违反 AppKit
@@ -188,9 +228,15 @@ layout 对 model frame 的所有权：
    animation key 替换旧动画。整个过程由 render server 插值，不在 DisplayLink callback 里逐帧改
    frame 或触发 layout。
 
+首行补偿已对照 `sub_1001DCBD4` 的 `0x1001DE430` 和排版助手 `sub_1001E0C34`：原版把第一条
+参与行的目标 frame 减去滚动位移，然后让后续行接在前一目标 frame 下方。这里对每行的起点统一加回
+clip 位移，已经表达同一个坐标转换；首行不再额外加减一次。回归会比较每行在视口中的起点，并确认
+包括首行在内的 model position 与动画终点都保持不变。
+
 `appleMusic26` 的「不接受新选行」由 coordinator 的 `isCascadeInFlight` 表达：最慢一行的 delay 加
 spring 的 `settlingDuration` 到期前，容器把新的 highlight index 存进
 `deferredHighlightedOriginalIndex`，旧行继续 karaoke 直到填满；settle 回调只应用最新一次请求。
+完成时刻从实际挂上的动画逐条取最晚结束时间，避免延迟公式修正后仍多等一档。
 点击歌词、用户滚动和大跨度 seek 都不等待：点击走 `mass 2 / stiffness 260 / damping 50` 的 interactive
 clip spring，用户滚动会取消 cascade 并只更新被推迟的行的 highlight 状态，非交互大跨度 seek 直接
 落到模型终点。初始化和离屏也直接落位。
@@ -352,7 +398,8 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
   同一轮复核还得出「Apple Music 的 normal update 由单 clip bounds spring 承担」，项目据此先后尝试
   `mass 1 / stiffness 100 / damping 18` 与 `period 0.6 / dampingRatio 0.725` 的单 clip spring，实机都被
   用户确认为接近线性平移。2026-09-04 重新核对证明那条结论错了：Apple Music 本来就是逐行错峰
-  cascade，参数与机制见上文。现在默认档就是它的原值，旧 SwiftUI cascade 保留为第二档；40% baseline
+  cascade。2026-09-05 又补齐了此前遗漏的 timedWords 动态弹簧与 delay 减一逻辑，参数与机制见上文。
+  旧 SwiftUI cascade 保留为第二档；40% baseline
   anchor 仍是项目的视觉校准，Apple Music pretty 模式实际用 `.center(rect:)` 锚在 `activeBaseline`。
 - 0007 阶段的全屏掉帧被归因于 cascade 本身，后来证明根因是行 layer 从未光栅化；见上文「行 layer
   光栅化」。
@@ -515,10 +562,36 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
   Apple Music，需要用户播放时按上文的 `defaults write` 切换并排比较；`LineTransition` 与 `InlineKaraoke`
   日志会写明当时生效的 variant 与 policy。
 
+2026-09-05 补齐逐字歌词动态换行弹簧与启动时序：
+
+- 回归 `appleMusicWordTimedCascadeUsesTheGapAfterThePreviousSungLine` 在旧实现上以原始退出码 1
+  失败：0.2、0.5、0.75 秒三种间隙都得到固定 stiffness 100 / damping 18，而非二进制公式的对应值。
+  接入动态分支后通过，并扩展覆盖重叠唱句和超过上限的间隙。
+- 向前、向后延迟回归也先以原始退出码 1 失败：应当一起启动的两行实际分别相隔 50 ms、25 ms。
+  修正减一截断后通过；同一探针同时验证每行在视口中的起点连续，首行和其他行的 model position
+  与动画终点均不变。
+- 结构化结束时间优先于 inline fallback；只有逐字起点而没有结束时间时保留固定弹簧；没有逐字数据时
+  也保留固定弹簧；延后追赶从最后真正显示过的行计算间隙，跳过的行不会污染参数。这些边界均进入
+  `LineTransitionProbes`，该 suite 共 13 项通过。
+- 修改只在重建歌词与换行时选择参数和安排动画，沿用现有行 layer 光栅化及 Core Animation 插值。
+  全库横向检查后，余下固定 spring 调用属于重新居中和间奏 dots；它们没有这条自动换行的 gap 输入，
+  因此继续使用原有固定曲线。旧 `legacySwiftUI` 策略与点击跳转测试保持通过。
+- `LYRICSX_USE_LOCAL_DEPENDENCY=1 swift test --package-path LyricsXPackage
+  --scratch-path /tmp/codex/SwiftPM/LyricsX --no-parallel`：137 项测试、17 个 suite 通过，原始退出码 0。
+  SwiftFormat lint 与 `git diff --check` 通过。
+- `MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 在
+  `/tmp/codex/DerivedData/LyricsX` 冷构建成功，原始退出码 0。先前尝试因 agent 旧缓存缺失 checkout
+  和预编译模块失败，移开损坏缓存后完成验证；最终警告来自未修改的依赖、Storyboard 和旧 API 使用，
+  本次修改的歌词动画代码没有编译警告。构建沿用 workspace 的依赖锁定版本。
+- 文档判断：更新本篇的原版调用链、参数公式、两档策略表、首行坐标补偿与验证记录；既有提案保留为
+  当时的决策快照，不把旧结论当成当前实现。没有新增需要登记的项目术语。
+- 未启动应用做交互式 UI 验证，也未运行 `xctrace`；本次验证不构成实际观感或全屏帧率测量。
+
 ## 以后重做版本核对时
 
 Apple Music 私有实现会随版本变化。升级验证时应分别核对：word factor 的语言门槛、rise/return delay、
-deglow spring、`lineChangeSpringTimingParametersValues` 与 `lineDelay`（pretty 与侧栏两个值）、回滚时的
-delay 处理、「动画中不选新行」的 tick 门槛、tap line spring、selected baseline fraction、行 layer 的
+deglow spring、`lineChangeSpringTimingParametersValues` 的消费端（包括 timedWords 动态分支与 gap 来源）、
+`lineDelay`（pretty 与侧栏两个值）、延迟序号的减一截断与回滚处理、首行位移如何传到后续行、
+「动画中不选新行」的 tick 门槛、tap line spring、selected baseline fraction、行 layer 的
 rasterize 生命周期、blur membership、viewport mask 分支、mask target 的 flipped 状态与 cubic curve。
 这些值集中在纯 plan、`LyricsSpecs` 与 `AnimationVariants`，不要先在 layer 执行代码里散改常数。

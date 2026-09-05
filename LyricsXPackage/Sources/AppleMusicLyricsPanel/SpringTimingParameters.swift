@@ -4,7 +4,7 @@ import QuartzCore
 extension AppleMusicLyrics {
     /// A `CASpringAnimation` described the way Apple Music describes one.
     ///
-    /// Music never writes spring coefficients down; `sub_1001662D4` derives them
+    /// For its period-based curves, Music's `sub_1001662D4` derives coefficients
     /// from a **period** and a damping ratio:
     ///
     /// ```
