@@ -12,7 +12,7 @@ struct ArtworkGradientConfigurationTests {
         #expect(configuration.maximumArtworkDimension == 300)
         #expect(configuration.drawableScale == 1)
         #expect(configuration.artworkTransitionDuration == 0.5)
-        #expect(configuration.baseMeshControlPointCount == 5)
+        #expect(configuration.baseMeshControlPointCount == 6)
         #expect(configuration.meshSubdivisionLevel == 3)
     }
 
@@ -43,9 +43,52 @@ struct ArtworkGradientConfigurationTests {
             subdivisionLevel: configuration.meshSubdivisionLevel
         )
 
-        #expect(meshTopology.vertexCountPerDimension == 33)
-        #expect(meshTopology.vertexCount == 1_089)
-        #expect(meshTopology.indexCount == 6_144)
+        #expect(meshTopology.vertexCountPerDimension == 41)
+        #expect(meshTopology.vertexCount == 1_681)
+        #expect(meshTopology.indexCount == 9_600)
+    }
+
+    @Test func meshSubdivisionRetainsAppleMusicControlSurfaceCurvature() throws {
+        let meshTopology = AppleMusicLyrics.ArtworkBackdropMeshTopology(
+            baseControlPointCount: 6,
+            subdivisionLevel: 3
+        )
+        let vertices = meshTopology.makeVertices()
+        let controlPoint = try #require(vertices.first { vertex in
+            abs(vertex.textureCoordinate.x - 0.2) < 0.00001
+                && abs(vertex.textureCoordinate.y - 0.2) < 0.00001
+        })
+        // Music's second preset after CAMeshTransform subdividedMesh:3.
+        #expect(abs(controlPoint.clipSpacePosition.x - -0.48579174) < 0.00002)
+        #expect(abs(controlPoint.clipSpacePosition.y - -0.43396914) < 0.00002)
+    }
+
+    @Test(arguments: [
+        (0, SIMD2<Float>(0.2, 1), SIMD2<Float>(0.00656875, 1.14418435), SIMD2<Float>(0.00656875, 1.14418435)),
+        (0, SIMD2<Float>(0.325, 0.475), SIMD2<Float>(-0.36648244, 0.09934746), SIMD2<Float>(-0.35348713, 0.20821613)),
+        (1, SIMD2<Float>(0.775, 0.675), SIMD2<Float>(0.79725677, 0.38115561), SIMD2<Float>(0.80704927, 0.37944725)),
+        (2, SIMD2<Float>(0.6, 0), SIMD2<Float>(0.45270625, -1.15425313), SIMD2<Float>(0.45270625, -1.15425313)),
+        (4, SIMD2<Float>(0.2, 0.2), SIMD2<Float>(-0.62434840, -0.62834156), SIMD2<Float>(-0.66586816, -0.60243762)),
+    ])
+    func meshPresetsRetainTheirCurvedBoundariesAndDestinationSurfaces(
+        meshVariant: Int,
+        textureCoordinate: SIMD2<Float>,
+        sourcePosition: SIMD2<Float>,
+        destinationPosition: SIMD2<Float>
+    ) throws {
+        let vertices = AppleMusicLyrics.ArtworkBackdropMeshTopology(
+            baseControlPointCount: 6,
+            subdivisionLevel: 3
+        ).makeVertices(meshVariant: meshVariant)
+        let vertex = try #require(vertices.first { vertex in
+            abs(vertex.textureCoordinate.x - textureCoordinate.x) < 0.00001
+                && abs(vertex.textureCoordinate.y - textureCoordinate.y) < 0.00001
+        })
+        // Samples from Music's control tables refined by CAMeshTransform.
+        #expect(abs(vertex.clipSpacePosition.x - sourcePosition.x) < 0.00002)
+        #expect(abs(vertex.clipSpacePosition.y - sourcePosition.y) < 0.00002)
+        #expect(abs(vertex.destinationClipSpacePosition.x - destinationPosition.x) < 0.00002)
+        #expect(abs(vertex.destinationClipSpacePosition.y - destinationPosition.y) < 0.00002)
     }
 }
 

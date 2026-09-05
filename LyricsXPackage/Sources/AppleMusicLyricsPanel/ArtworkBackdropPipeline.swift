@@ -30,9 +30,10 @@ extension AppleMusicLyrics {
 
         init(
             device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration
+            configuration: ArtworkGradientConfiguration,
+            shaderLibrary: MTLLibrary? = nil
         ) throws {
-            let shaderLibrary = try metalDevice.makeDefaultLibrary(bundle: .module)
+            let shaderLibrary = try shaderLibrary ?? metalDevice.makeDefaultLibrary(bundle: .module)
             let renderingPipeline = try Self.makeRenderingPipeline(
                 device: metalDevice,
                 shaderLibrary: shaderLibrary,
@@ -47,7 +48,10 @@ extension AppleMusicLyrics {
                 baseControlPointCount: configuration.baseMeshControlPointCount,
                 subdivisionLevel: configuration.meshSubdivisionLevel
             )
-            let meshVertices = meshTopology.makeVertices()
+            let meshVertices = meshTopology.makeVertices(
+                meshVariant: configuration.meshVariant
+                    ?? Int.random(in: 0 ..< ArtworkBackdropMeshPresets.variantCount)
+            )
             let meshIndices = meshTopology.makeIndices()
             guard let meshVertexBuffer = Self.makeBuffer(
                 from: meshVertices,
@@ -90,9 +94,9 @@ extension AppleMusicLyrics {
             colorAttachment.loadAction = .clear
             colorAttachment.storeAction = .store
             colorAttachment.clearColor = MTLClearColor(
-                red: 0.05,
-                green: 0.07,
-                blue: 0.1,
+                red: 0,
+                green: 0,
+                blue: 0,
                 alpha: 1
             )
             guard let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(
@@ -103,43 +107,32 @@ extension AppleMusicLyrics {
 
             let viewportAspectRatio = Float(destinationTexture.width)
                 / Float(max(1, destinationTexture.height))
-            var aspectAndTransitionParameters = SIMD4<Float>(
-                sourceTextureState.aspectRatio,
-                destinationTextureState.aspectRatio,
+            var compositionParameters = SIMD4<Float>(
                 viewportAspectRatio,
-                transitionProgress
-            )
-            let rotationAngle = sin(Float(animationTime) * 0.07) * 0.035
-            var rotationParameters = SIMD4<Float>(
-                sin(rotationAngle),
-                cos(rotationAngle),
-                0.92,
-                0
+                Float(animationTime),
+                transitionProgress,
+                1.3
             )
 
             renderCommandEncoder.label = "Artwork Backdrop Composition Encoder"
             renderCommandEncoder.setRenderPipelineState(compositionPipelineState)
             renderCommandEncoder.setVertexBytes(
-                &aspectAndTransitionParameters,
+                &compositionParameters,
                 length: MemoryLayout<SIMD4<Float>>.stride,
                 index: 0
-            )
-            renderCommandEncoder.setVertexBytes(
-                &rotationParameters,
-                length: MemoryLayout<SIMD4<Float>>.stride,
-                index: 1
             )
             renderCommandEncoder.setFragmentTexture(sourceTextureState.texture, index: 0)
             renderCommandEncoder.setFragmentTexture(destinationTextureState.texture, index: 1)
             renderCommandEncoder.setFragmentBytes(
-                &aspectAndTransitionParameters,
+                &compositionParameters,
                 length: MemoryLayout<SIMD4<Float>>.stride,
                 index: 0
             )
             renderCommandEncoder.drawPrimitives(
                 type: .triangle,
                 vertexStart: 0,
-                vertexCount: 3
+                vertexCount: 6,
+                instanceCount: 3
             )
             renderCommandEncoder.endEncoding()
             return true
@@ -159,26 +152,21 @@ extension AppleMusicLyrics {
                 return false
             }
 
-            let luminosityRangeProgress = min(
-                1,
-                max(0, (averageLuminosity - 0.18) / 0.72)
-            )
-            let blackScrimOpacity = configuration.minimumBlackScrimOpacity
-                + (configuration.maximumBlackScrimOpacity
-                    - configuration.minimumBlackScrimOpacity) * luminosityRangeProgress
-            let whiteScrimOpacity = configuration.maximumWhiteScrimOpacity
-                * min(1, max(0, (0.2 - averageLuminosity) / 0.2))
             var motionParameters = SIMD4<Float>(
                 Float(animationTime),
-                0.018,
-                0.014,
+                1.75,
+                0.8,
                 0
             )
             var appearanceParameters = SIMD4<Float>(
                 configuration.saturation,
-                blackScrimOpacity,
-                whiteScrimOpacity,
-                0
+                configuration.blackScrimOpacity,
+                0.02,
+                0.995
+            )
+            var colorRangeParameters = SIMD2<Float>(
+                configuration.minimumColorComponent,
+                configuration.maximumColorComponent
             )
 
             renderCommandEncoder.label = "Artwork Backdrop Final Encoder"
@@ -194,6 +182,11 @@ extension AppleMusicLyrics {
                 &appearanceParameters,
                 length: MemoryLayout<SIMD4<Float>>.stride,
                 index: 0
+            )
+            renderCommandEncoder.setFragmentBytes(
+                &colorRangeParameters,
+                length: MemoryLayout<SIMD2<Float>>.stride,
+                index: 1
             )
             renderCommandEncoder.drawIndexedPrimitives(
                 type: .triangle,

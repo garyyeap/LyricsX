@@ -3,12 +3,12 @@ using namespace metal;
 
 struct ArtworkCompositionVertexOutput {
     float4 position [[position]];
-    float2 sourceTextureCoordinate;
-    float2 destinationTextureCoordinate;
+    float2 textureCoordinate;
 };
 
 struct ArtworkBackdropMeshVertex {
     float2 clipSpacePosition;
+    float2 destinationClipSpacePosition;
     float2 textureCoordinate;
 };
 
@@ -17,69 +17,59 @@ struct ArtworkBackdropMeshVertexOutput {
     float2 textureCoordinate;
 };
 
-constant float2 artworkBackdropClipSpacePositions[3] = {
+constant float2 artworkBackdropClipSpacePositions[6] = {
     float2(-1.0, -1.0),
-    float2(3.0, -1.0),
-    float2(-1.0, 3.0),
+    float2(-1.0, 1.0),
+    float2(1.0, 1.0),
+    float2(-1.0, -1.0),
+    float2(1.0, 1.0),
+    float2(1.0, -1.0),
 };
 
-float2 artworkBackdropAspectFilledTextureCoordinate(
-    float2 textureCoordinate,
-    float textureAspectRatio,
-    float viewportAspectRatio,
-    float rotationSine,
-    float rotationCosine,
-    float zoomScale
-) {
-    float2 centeredTextureCoordinate = textureCoordinate - 0.5;
-    if (textureAspectRatio > viewportAspectRatio) {
-        centeredTextureCoordinate.x *= viewportAspectRatio / textureAspectRatio;
-    } else {
-        centeredTextureCoordinate.y *= textureAspectRatio / viewportAspectRatio;
-    }
-    centeredTextureCoordinate *= zoomScale;
-    centeredTextureCoordinate = float2(
-        centeredTextureCoordinate.x * rotationCosine
-            - centeredTextureCoordinate.y * rotationSine,
-        centeredTextureCoordinate.x * rotationSine
-            + centeredTextureCoordinate.y * rotationCosine
+constant float2 artworkBackdropInstanceTranslations[3] = {
+    float2(0.0, 0.0),
+    float2(-0.5, 0.7),
+    float2(-0.95, -0.7),
+};
+
+constant float artworkBackdropRotationPeriods[3] = {60.0, 45.0, 35.0};
+
+float2 artworkBackdropRotateClockwise(float2 position, float rotationSine, float rotationCosine) {
+    return float2(
+        position.x * rotationCosine + position.y * rotationSine,
+        position.y * rotationCosine - position.x * rotationSine
     );
-    return centeredTextureCoordinate + 0.5;
 }
 
 vertex ArtworkCompositionVertexOutput artworkBackdropCompositionVertex(
     uint vertexIdentifier [[vertex_id]],
-    constant float4 &aspectAndTransitionParameters [[buffer(0)]],
-    constant float4 &rotationParameters [[buffer(1)]]
+    uint instanceIdentifier [[instance_id]],
+    constant float4 &compositionParameters [[buffer(0)]]
 ) {
     float2 clipSpacePosition = artworkBackdropClipSpacePositions[vertexIdentifier];
     float2 textureCoordinate = clipSpacePosition * 0.5 + 0.5;
     textureCoordinate.y = 1.0 - textureCoordinate.y;
-    float sourceTextureAspectRatio = aspectAndTransitionParameters.x;
-    float destinationTextureAspectRatio = aspectAndTransitionParameters.y;
-    float viewportAspectRatio = aspectAndTransitionParameters.z;
-    float rotationSine = rotationParameters.x;
-    float rotationCosine = rotationParameters.y;
-    float zoomScale = rotationParameters.z;
+    float rotationAngle = compositionParameters.y * (M_PI_F * 2.0)
+        / artworkBackdropRotationPeriods[instanceIdentifier];
+    float rotationSine = sin(rotationAngle);
+    float rotationCosine = cos(rotationAngle);
+    // Music applies view * rotation * model translation * rotation.
+    float2 artworkPosition = artworkBackdropRotateClockwise(
+        clipSpacePosition,
+        rotationSine,
+        rotationCosine
+    );
+    artworkPosition += artworkBackdropInstanceTranslations[instanceIdentifier];
+    artworkPosition = artworkBackdropRotateClockwise(
+        artworkPosition,
+        rotationSine,
+        rotationCosine
+    );
+    artworkPosition.y *= compositionParameters.x;
 
     ArtworkCompositionVertexOutput output;
-    output.position = float4(clipSpacePosition, 0.0, 1.0);
-    output.sourceTextureCoordinate = artworkBackdropAspectFilledTextureCoordinate(
-        textureCoordinate,
-        sourceTextureAspectRatio,
-        viewportAspectRatio,
-        rotationSine,
-        rotationCosine,
-        zoomScale
-    );
-    output.destinationTextureCoordinate = artworkBackdropAspectFilledTextureCoordinate(
-        textureCoordinate,
-        destinationTextureAspectRatio,
-        viewportAspectRatio,
-        -rotationSine,
-        rotationCosine,
-        zoomScale
-    );
+    output.position = float4(artworkPosition, 0.0, 1.0);
+    output.textureCoordinate = textureCoordinate;
     return output;
 }
 
@@ -87,7 +77,7 @@ fragment float4 artworkBackdropCompositionFragment(
     ArtworkCompositionVertexOutput input [[stage_in]],
     texture2d<float> sourceTexture [[texture(0)]],
     texture2d<float> destinationTexture [[texture(1)]],
-    constant float4 &aspectAndTransitionParameters [[buffer(0)]]
+    constant float4 &compositionParameters [[buffer(0)]]
 ) {
     constexpr sampler artworkSampler(
         address::clamp_to_edge,
@@ -96,17 +86,19 @@ fragment float4 artworkBackdropCompositionFragment(
     );
     float4 sourceColor = sourceTexture.sample(
         artworkSampler,
-        input.sourceTextureCoordinate
+        input.textureCoordinate
     );
     float4 destinationColor = destinationTexture.sample(
         artworkSampler,
-        input.destinationTextureCoordinate
+        input.textureCoordinate
     );
-    return mix(
+    float3 artworkColor = mix(
         sourceColor,
         destinationColor,
-        clamp(aspectAndTransitionParameters.w, 0.0, 1.0)
-    );
+        clamp(compositionParameters.z, 0.0, 1.0)
+    ).rgb;
+    float luminosity = dot(artworkColor, float3(0.3, 0.59, 0.11));
+    return float4(mix(float3(luminosity), artworkColor, compositionParameters.w), 1.0);
 }
 
 vertex ArtworkBackdropMeshVertexOutput artworkBackdropMeshVertex(
@@ -116,28 +108,26 @@ vertex ArtworkBackdropMeshVertexOutput artworkBackdropMeshVertex(
 ) {
     ArtworkBackdropMeshVertex meshVertex = vertices[vertexIdentifier];
     float elapsedTime = motionParameters.x;
-    float horizontalAmplitude = motionParameters.y;
-    float verticalAmplitude = motionParameters.z;
-    float edgeAttenuation = sin(meshVertex.textureCoordinate.x * M_PI_F)
-        * sin(meshVertex.textureCoordinate.y * M_PI_F);
-    float horizontalOffset = sin(
-        elapsedTime * 0.19 + meshVertex.textureCoordinate.y * M_PI_F * 2.0
-    ) * horizontalAmplitude * edgeAttenuation;
-    float verticalOffset = cos(
-        elapsedTime * 0.16 + meshVertex.textureCoordinate.x * M_PI_F * 2.0
-    ) * verticalAmplitude * edgeAttenuation;
+    float warpPhase = elapsedTime * M_PI_F / motionParameters.y;
+    float interpolationPosition = acos(clamp(sin(warpPhase), -1.0, 1.0)) / M_PI_F;
+    float interpolationProgress = smoothstep(0.0, 1.0, interpolationPosition);
+    float2 position = mix(
+        meshVertex.clipSpacePosition,
+        meshVertex.destinationClipSpacePosition,
+        interpolationProgress
+    );
 
     ArtworkBackdropMeshVertexOutput output;
-    output.position = float4(meshVertex.clipSpacePosition, 0.0, 1.0);
-    output.textureCoordinate = meshVertex.textureCoordinate
-        + float2(horizontalOffset, verticalOffset);
+    output.position = float4(position, 0.0, 1.0);
+    output.textureCoordinate = (meshVertex.textureCoordinate - 0.5) * motionParameters.z + 0.5;
     return output;
 }
 
 fragment float4 artworkBackdropFinalFragment(
     ArtworkBackdropMeshVertexOutput input [[stage_in]],
     texture2d<float> blurredArtworkTexture [[texture(0)]],
-    constant float4 &appearanceParameters [[buffer(0)]]
+    constant float4 &appearanceParameters [[buffer(0)]],
+    constant float2 &colorRangeParameters [[buffer(1)]]
 ) {
     constexpr sampler artworkSampler(
         address::clamp_to_edge,
@@ -147,17 +137,15 @@ fragment float4 artworkBackdropFinalFragment(
         artworkSampler,
         input.textureCoordinate
     ).rgb;
-    float luminosity = dot(artworkColor, float3(0.2126, 0.7152, 0.0722));
+    float luminosity = dot(artworkColor, float3(0.3, 0.59, 0.11));
     float3 saturatedColor = mix(
         float3(luminosity),
         artworkColor,
         appearanceParameters.x
     );
-    saturatedColor = mix(
-        saturatedColor,
-        float3(1.0),
-        clamp(appearanceParameters.z, 0.0, 1.0)
-    );
+    // Limit highlights before the dark scrim so saturation cannot cancel it.
+    saturatedColor = min(saturatedColor, appearanceParameters.w);
     saturatedColor *= 1.0 - clamp(appearanceParameters.y, 0.0, 1.0);
-    return float4(clamp(saturatedColor, 0.0, 1.0), 1.0);
+    saturatedColor -= appearanceParameters.z;
+    return float4(clamp(saturatedColor, colorRangeParameters.x, colorRangeParameters.y), 1.0);
 }

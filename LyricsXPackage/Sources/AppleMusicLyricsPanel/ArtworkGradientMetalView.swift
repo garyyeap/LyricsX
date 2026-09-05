@@ -11,12 +11,14 @@ extension AppleMusicLyrics {
         init(
             frame frameRect: NSRect,
             device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration
+            configuration: ArtworkGradientConfiguration,
+            shaderLibrary: MTLLibrary? = nil
         ) throws {
             self.configuration = configuration
             self.renderer = try ArtworkBackdropRenderer(
                 device: metalDevice,
-                configuration: configuration
+                configuration: configuration,
+                shaderLibrary: shaderLibrary
             )
 
             super.init(frame: frameRect, device: metalDevice)
@@ -33,7 +35,7 @@ extension AppleMusicLyrics {
             autoResizeDrawable = false
             presentsWithTransaction = false
             clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.1, alpha: 1)
-            colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+            colorspace = nil
             isPaused = true
             updateDrawableSize()
         }

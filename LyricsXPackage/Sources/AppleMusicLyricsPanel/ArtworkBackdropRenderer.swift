@@ -103,10 +103,12 @@ extension AppleMusicLyrics {
     }
 
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientFrame"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientFrame"
     )
@@ -129,7 +131,8 @@ extension AppleMusicLyrics {
 
         init(
             device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration
+            configuration: ArtworkGradientConfiguration,
+            shaderLibrary: MTLLibrary? = nil
         ) throws {
             guard MPSSupportsMTLDevice(metalDevice) else {
                 throw ArtworkBackdropRendererCreationError
@@ -140,7 +143,8 @@ extension AppleMusicLyrics {
             }
             let pipeline = try ArtworkBackdropPipeline(
                 device: metalDevice,
-                configuration: configuration
+                configuration: configuration,
+                shaderLibrary: shaderLibrary
             )
 
             self.configuration = configuration

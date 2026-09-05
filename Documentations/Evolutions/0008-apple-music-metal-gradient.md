@@ -3,7 +3,7 @@
 - **状态**: In Progress
 - **作者**: JH
 - **创建日期**: 2026-08-29
-- **最后更新**: 2026-08-31
+- **最后更新**: 2026-09-05
 - **所属愿景**: 无
 - **关联提案**: [0007 对齐 Apple Music 26.6 歌词动画](0007-apple-music-lyrics-animation-parity.md)
 - **实现分支 / Pull Request**: `develop`（当前工作树，未单独开分支）
@@ -223,3 +223,4 @@ artwork 进入 pending slot，避免中途跳色。运动完全由暂停感知�
 | 2026-08-31 | Apple Music 形态的 renderer 已落地 | 已替换为 `MTKView` delegate cadence、300 pixel private mipmapped artwork texture、离屏 transition、`MPSImageGaussianBlur` 与 5 × 5 / level 3 mesh final pass；旧 palette extractor、逐像素色场与自建 timer 已删除。串行执行的歌词面板相关 50 项测试原始退出码为 0，隔离 DerivedData 的 umbrella workspace Debug build 原始退出码为 0，产物 `default.metallib` 包含四个预期 function。完整 package 仍有既存 `WidgetDataStore` round-trip 失败，因此不宣称全套测试通过；真实观感和全屏 cadence 等待用户复检，提案继续保持 `In Progress`。 |
 | 2026-08-31 | 单实例 cadence 修订 | 最新日志把大部分 frame 定位在 56.5–60 FPS，间歇 callback gap 为 48–128 ms，而同帧 Metal encoding 低于 0.6 ms；调研期间同时运行的两个 Debug app 与默认逐帧 signpost 会污染测量。本轮默认关闭逐帧 signpost，并对齐 Apple Music 的 blur options、非 sRGB output format 与“离屏编码后再取 drawable”顺序。提案保持 `In Progress`，等待单实例真实全屏复检。 |
 | 2026-08-31 | cadence 修订构建完成 | 新增回归测试先红后绿；52 项定向测试中 51 项通过，一个真实时间行内弹跳探针受并发负载影响失败，单独重跑通过。隔离 DerivedData 的 umbrella workspace Debug build 原始退出码为 0，四个 Metal function 均存在。已只启动这一份隔离 app，运行时 cadence 等待用户打开全屏歌词后复检。 |
+| 2026-09-05 | 用户批准背景视觉修复 | 根据 Music CPU 数据和本机 Metal 中间表示，补齐高亮限制、深色遮罩及通道下限，恢复三组旋转与双曲面插值；纠正 5×5 个单元被当成 5×5 个控制点的误读。具体实现与本轮验证记录见配套实现说明。保持现有 MTKView/MPS 调度架构，未启动应用做交互验证。 |

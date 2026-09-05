@@ -9,24 +9,26 @@ extension AppleMusicLyrics {
         let artworkAbsenceFallbackDelay: TimeInterval
         let baseMeshControlPointCount: Int
         let meshSubdivisionLevel: Int
+        let meshVariant: Int?
         let blurSigmaFraction: Float
         let saturation: Float
-        let minimumBlackScrimOpacity: Float
-        let maximumBlackScrimOpacity: Float
-        let maximumWhiteScrimOpacity: Float
+        let blackScrimOpacity: Float
+        let minimumColorComponent: Float
+        let maximumColorComponent: Float
 
         init(
             maximumArtworkDimension: Int = 300,
             drawableScale: CGFloat = 1,
             artworkTransitionDuration: TimeInterval = 0.5,
             artworkAbsenceFallbackDelay: TimeInterval = 1.2,
-            baseMeshControlPointCount: Int = 5,
+            baseMeshControlPointCount: Int = 6,
             meshSubdivisionLevel: Int = 3,
+            meshVariant: Int? = nil,
             blurSigmaFraction: Float = 0.045394707,
             saturation: Float = 2,
-            minimumBlackScrimOpacity: Float = 0.08,
-            maximumBlackScrimOpacity: Float = 0.22,
-            maximumWhiteScrimOpacity: Float = 0.08
+            blackScrimOpacity: Float = 0.25,
+            minimumColorComponent: Float = 0.07,
+            maximumColorComponent: Float = 0.97
         ) {
             self.maximumArtworkDimension = maximumArtworkDimension
             self.drawableScale = drawableScale
@@ -34,11 +36,12 @@ extension AppleMusicLyrics {
             self.artworkAbsenceFallbackDelay = artworkAbsenceFallbackDelay
             self.baseMeshControlPointCount = baseMeshControlPointCount
             self.meshSubdivisionLevel = meshSubdivisionLevel
+            self.meshVariant = meshVariant
             self.blurSigmaFraction = blurSigmaFraction
             self.saturation = saturation
-            self.minimumBlackScrimOpacity = minimumBlackScrimOpacity
-            self.maximumBlackScrimOpacity = maximumBlackScrimOpacity
-            self.maximumWhiteScrimOpacity = maximumWhiteScrimOpacity
+            self.blackScrimOpacity = blackScrimOpacity
+            self.minimumColorComponent = minimumColorComponent
+            self.maximumColorComponent = maximumColorComponent
         }
 
         func drawablePixelSize(forNativeBackingSize nativeBackingSize: CGSize) -> CGSize {

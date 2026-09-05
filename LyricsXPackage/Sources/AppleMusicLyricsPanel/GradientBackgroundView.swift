@@ -5,10 +5,12 @@ import UIFoundation
 
 extension AppleMusicLyrics {
     @Loggable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientRenderer"
     )
     @Signpostable(
+        isEnabled: false,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientRenderer"
     )

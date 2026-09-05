@@ -44,8 +44,8 @@
   如何经过 LRCX 保存，行内 factor 与可切换的结构化 emphasis 策略、Apple Music 真实的逐行 cascade 与
   可切换的两档参数、行 layer 光栅化、`.topRelative(40)`、多行坐标、contextual blur 与 viewport edge fade
   如何落地，以及 AppKit view geometry 和 Core Animation presentation 各自拥有什么状态。
-- [Apple Music 歌词面板 Metal 渐变背景](Internal/AppleMusicMetalGradient.md) —— palette 提取、package Metal
-  resource、低分辨率 drawable、窗口拖动与遮挡暂停的实现边界。
+- [Apple Music 歌词面板 Metal 渐变背景](Internal/AppleMusicMetalGradient.md) —— 三组封面旋转、MPS 模糊、双曲面
+  插值、原版明暗处理、离屏像素回归测试，以及窗口拖动与遮挡暂停的实现边界。
 - [歌词 HUD 窗口显示与关闭](Internal/LyricsHUDPresentation.md) —— 为什么菜单动作必须读取实际窗口可见性和
   应用前台状态，以及隐藏、后台和前台三种状态分别如何处理。
 
