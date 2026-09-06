@@ -15,7 +15,7 @@ extension AppleMusicLyrics {
         category: "GradientRenderer"
     )
     final class GradientBackgroundView: NSView {
-        private let configuration = ArtworkGradientConfiguration()
+        private let variant: ArtworkBackdropVariant
         private let fallbackView = LayerBackedView()
         private let metalView: ArtworkGradientMetalView?
         private let textureLoader: MTKTextureLoader?
@@ -35,13 +35,15 @@ extension AppleMusicLyrics {
         private var isPerformingLiveResize = false
 
         override init(frame frameRect: NSRect) {
-            let metalDevice = MTLCreateSystemDefaultDevice()
-            if let metalDevice {
+            let variant = ArtworkBackdropVariant.resolve()
+            self.variant = variant
+            if let metalDevice = MTLCreateSystemDefaultDevice(),
+               let pipeline = try? variant.makePipeline(device: metalDevice) {
                 self.textureLoader = MTKTextureLoader(device: metalDevice)
                 self.metalView = try? ArtworkGradientMetalView(
                     frame: frameRect,
                     device: metalDevice,
-                    configuration: configuration
+                    pipeline: pipeline
                 )
             } else {
                 self.textureLoader = nil
@@ -51,6 +53,15 @@ extension AppleMusicLyrics {
             super.init(frame: frameRect)
             configureViewHierarchy()
             observeAccessibilityDisplayOptions()
+            let variantName = variant.rawValue
+            let hasMetalView = metalView != nil
+            #log(
+                .info,
+                """
+                Gradient backdrop variant=\(variantName, privacy: .public) \
+                metal=\(hasMetalView, privacy: .public)
+                """
+            )
         }
 
         @available(*, unavailable)
@@ -180,7 +191,8 @@ extension AppleMusicLyrics.GradientBackgroundView {
         generation: UInt64,
         textureLoader: MTKTextureLoader
     ) {
-        let maximumArtworkDimension = configuration.maximumArtworkDimension
+        let maximumArtworkDimension = variant.maximumArtworkDimension
+        let textureLoadingOptions = variant.artworkTextureLoadingOptions
         let preparationInterval = #signpost(
             .begin,
             "ArtworkBackdropPreparation",
@@ -194,7 +206,7 @@ extension AppleMusicLyrics.GradientBackgroundView {
             let preparedTexture = preparedArtwork.flatMap { preparedArtwork in
                 try? textureLoader.newTexture(
                     cgImage: preparedArtwork.image,
-                    options: Self.artworkTextureLoadingOptions
+                    options: textureLoadingOptions
                 )
             }
             let preparationSucceeded = preparedTexture != nil
@@ -428,18 +440,8 @@ extension AppleMusicLyrics.GradientBackgroundView {
         }
         self.artworkAbsenceWorkItem = artworkAbsenceWorkItem
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + configuration.artworkAbsenceFallbackDelay,
+            deadline: .now() + variant.artworkAbsenceFallbackDelay,
             execute: artworkAbsenceWorkItem
         )
-    }
-
-    fileprivate static var artworkTextureLoadingOptions: [MTKTextureLoader.Option: Any] {
-        [
-            .SRGB: true,
-            .generateMipmaps: true,
-            .origin: MTKTextureLoader.Origin.topLeft,
-            .textureStorageMode: NSNumber(value: MTLStorageMode.private.rawValue),
-            .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue),
-        ]
     }
 }

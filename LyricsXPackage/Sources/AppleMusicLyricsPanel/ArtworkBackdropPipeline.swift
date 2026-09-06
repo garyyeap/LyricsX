@@ -1,4 +1,7 @@
+import CoreGraphics
+import Foundation
 import Metal
+import MetalPerformanceShaders
 
 extension AppleMusicLyrics {
     struct ArtworkBackdropTextureState {
@@ -18,15 +21,31 @@ extension AppleMusicLyrics {
         case unableToCreateFallbackTexture
     }
 
-    final class ArtworkBackdropPipeline {
+    /// The MiniPlayer large-artwork backdrop (`TSLBackdropMetalView`) as
+    /// Music 26.6 ships it: a full-resolution composition of three rotating
+    /// artwork copies in linear light, a diagonal-relative Gaussian blur and a
+    /// five-segment mesh warp with the dark scrim applied in the final pass.
+    /// Kept as `ArtworkBackdropVariant.legacyTSL` for side-by-side comparison.
+    final class ArtworkBackdropPipeline: ArtworkBackdropFramePipeline {
         let fallbackTextureState: ArtworkBackdropTextureState
         let drawablePixelFormat: MTLPixelFormat
+        let drawableColorSpace: CGColorSpace? = nil
+        let clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.1, alpha: 1)
 
+        var artworkTransitionDuration: TimeInterval {
+            configuration.artworkTransitionDuration
+        }
+
+        private let metalDevice: MTLDevice
+        private let configuration: ArtworkGradientConfiguration
         private let compositionPipelineState: MTLRenderPipelineState
         private let finalPipelineState: MTLRenderPipelineState
         private let meshVertexBuffer: MTLBuffer
         private let meshIndexBuffer: MTLBuffer
         private let meshIndexCount: Int
+        private var compositionTexture: MTLTexture?
+        private var blurredTexture: MTLTexture?
+        private var gaussianBlur: MPSImageGaussianBlur?
 
         init(
             device metalDevice: MTLDevice,
@@ -40,6 +59,8 @@ extension AppleMusicLyrics {
                 preferredPixelFormats: ArtworkBackdropRenderingProfile
                     .preferredDrawablePixelFormats
             )
+            self.metalDevice = metalDevice
+            self.configuration = configuration
             self.compositionPipelineState = renderingPipeline.compositionPipelineState
             self.finalPipelineState = renderingPipeline.finalPipelineState
             self.drawablePixelFormat = renderingPipeline.pixelFormat
@@ -75,6 +96,105 @@ extension AppleMusicLyrics {
             self.fallbackTextureState = ArtworkBackdropTextureState(
                 texture: fallbackTexture,
                 averageLuminosity: 0.28
+            )
+        }
+
+        func drawableSizeWillChange(_ drawableSize: CGSize) {
+            compositionTexture = nil
+            blurredTexture = nil
+            gaussianBlur = nil
+        }
+
+        func prepareResources(
+            for context: ArtworkBackdropFrameContext
+        ) -> ArtworkBackdropResourcePreparation {
+            let textureWidth = max(1, Int(context.drawableSize.width.rounded()))
+            let textureHeight = max(1, Int(context.drawableSize.height.rounded()))
+            if compositionTexture?.width == textureWidth,
+               compositionTexture?.height == textureHeight,
+               blurredTexture?.width == textureWidth,
+               blurredTexture?.height == textureHeight,
+               gaussianBlur != nil {
+                return .ready
+            }
+
+            let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: drawablePixelFormat,
+                width: textureWidth,
+                height: textureHeight,
+                mipmapped: false
+            )
+            textureDescriptor.storageMode = .private
+            textureDescriptor.usage = [.renderTarget, .shaderRead, .shaderWrite]
+            guard let compositionTexture = metalDevice.makeTexture(
+                descriptor: textureDescriptor
+            ), let blurredTexture = metalDevice.makeTexture(
+                descriptor: textureDescriptor
+            ) else {
+                return .failed
+            }
+            compositionTexture.label = "Artwork Backdrop Composition Texture"
+            blurredTexture.label = "Artwork Backdrop Blurred Texture"
+
+            let textureDiagonal = hypot(Float(textureWidth), Float(textureHeight))
+            let blurSigma = max(
+                1,
+                floor(textureDiagonal * configuration.blurSigmaFraction)
+            )
+            let gaussianBlur = MPSImageGaussianBlur(
+                device: metalDevice,
+                sigma: blurSigma
+            )
+            gaussianBlur.options = ArtworkBackdropRenderingProfile.gaussianBlurOptions
+            gaussianBlur.edgeMode = ArtworkBackdropRenderingProfile.gaussianBlurEdgeMode
+
+            self.compositionTexture = compositionTexture
+            self.blurredTexture = blurredTexture
+            self.gaussianBlur = gaussianBlur
+            return .rebuilt
+        }
+
+        func encodeOffscreenFrame(
+            commandBuffer: MTLCommandBuffer,
+            context: ArtworkBackdropFrameContext
+        ) -> Bool {
+            guard let compositionTexture, let blurredTexture, let gaussianBlur else {
+                return false
+            }
+            guard encodeComposition(
+                commandBuffer: commandBuffer,
+                destinationTexture: compositionTexture,
+                sourceTextureState: context.sourceTextureState,
+                destinationTextureState: context.destinationTextureState,
+                transitionProgress: context.transitionProgress,
+                animationTime: context.animationTime
+            ) else {
+                return false
+            }
+            gaussianBlur.encode(
+                commandBuffer: commandBuffer,
+                sourceTexture: compositionTexture,
+                destinationTexture: blurredTexture
+            )
+            return true
+        }
+
+        func encodeFinalFrame(
+            commandBuffer: MTLCommandBuffer,
+            renderPassDescriptor: MTLRenderPassDescriptor,
+            context: ArtworkBackdropFrameContext
+        ) -> Bool {
+            guard let blurredTexture else { return false }
+            return encodeFinalBackdrop(
+                commandBuffer: commandBuffer,
+                renderPassDescriptor: renderPassDescriptor,
+                blurredTexture: blurredTexture,
+                animationTime: context.animationTime,
+                averageLuminosity: context.sourceTextureState.averageLuminosity
+                    + (context.destinationTextureState.averageLuminosity
+                        - context.sourceTextureState.averageLuminosity)
+                    * context.transitionProgress,
+                configuration: configuration
             )
         }
 

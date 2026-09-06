@@ -64,11 +64,18 @@ swift test --filter LyricsLibraryFixtureProbes
 # with Music's own mass/stiffness/damping, rather than being stepped by hand
 # from the display link. Offscreen and synthetic — no recording, no player.
 swift test --filter ScrollSpringProbes
+
+# The panel backdrop: Music 26's Now Playing pipeline (`mediaCoreUI26`, the
+# default) and the MiniPlayer pipeline kept as `legacyTSL`. Real offscreen
+# Metal rendering read back pixel by pixel, plus the uniform layout, mesh
+# tables and orientation table. LYRICSX_BACKDROP_PREVIEW_DIRECTORY dumps the
+# full-frame test's PNGs.
+swift test --filter "NowPlayingBackdrop|ArtworkBackdrop|ArtworkGradient|ArtworkRendering"
 ```
 
 `LyricsXWidgetShared`'s `WidgetDataStoreTests` has a pre-existing parallel-execution race (two tests share one store file), so a bare `swift test` may show its failures — they are unrelated to the panel probes.
 
-Standalone `swift build` / `swift test` in `LyricsXPackage/` resolves `LyricsKit`/`MusicPlayer` from their remote `develop` branches by default; set `LYRICSX_USE_LOCAL_DEPENDENCY=1` to use the sibling checkouts instead. The `LyricsXPackage/Package.resolved` it writes is gitignored — the canonical pins live in the Xcode project.
+Standalone `swift build` / `swift test` in `LyricsXPackage/` resolves `LyricsKit`/`MusicPlayer` from their pinned remote tags by default; set `LYRICSX_USE_LOCAL_DEPENDENCY=1` to use the sibling checkouts instead. `AppleMusicLyricsPanel` currently needs the sibling `LyricsKit` (`SynchronizedTextTiming` is not in the pinned 1.11.0 tag), so package builds and tests of the panel must set that variable until LyricsKit is re-tagged. The `LyricsXPackage/Package.resolved` it writes is gitignored — the canonical pins live in the Xcode project.
 
 ## Linting & Formatting
 

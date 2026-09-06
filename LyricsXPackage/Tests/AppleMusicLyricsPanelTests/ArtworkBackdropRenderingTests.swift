@@ -15,8 +15,7 @@ struct ArtworkBackdropRenderingTests {
         let view = try AppleMusicLyrics.ArtworkGradientMetalView(
             frame: .zero,
             device: renderer.device,
-            configuration: .init(meshVariant: 1),
-            shaderLibrary: renderer.shaderLibrary
+            pipeline: renderer.pipeline
         )
 
         #expect(view.colorspace == nil)

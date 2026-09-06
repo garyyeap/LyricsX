@@ -15,6 +15,9 @@ extension AppleMusicLyrics {
         let blackScrimOpacity: Float
         let minimumColorComponent: Float
         let maximumColorComponent: Float
+        let presentationSaturation: Float
+        let presentationContrast: Float
+        let presentationBrightness: Float
 
         init(
             maximumArtworkDimension: Int = 300,
@@ -28,7 +31,10 @@ extension AppleMusicLyrics {
             saturation: Float = 2,
             blackScrimOpacity: Float = 0.25,
             minimumColorComponent: Float = 0.07,
-            maximumColorComponent: Float = 0.97
+            maximumColorComponent: Float = 0.97,
+            presentationSaturation: Float = 0.6,
+            presentationContrast: Float = 0.65,
+            presentationBrightness: Float = 0.1
         ) {
             self.maximumArtworkDimension = maximumArtworkDimension
             self.drawableScale = drawableScale
@@ -42,6 +48,9 @@ extension AppleMusicLyrics {
             self.blackScrimOpacity = blackScrimOpacity
             self.minimumColorComponent = minimumColorComponent
             self.maximumColorComponent = maximumColorComponent
+            self.presentationSaturation = presentationSaturation
+            self.presentationContrast = presentationContrast
+            self.presentationBrightness = presentationBrightness
         }
 
         func drawablePixelSize(forNativeBackingSize nativeBackingSize: CGSize) -> CGSize {

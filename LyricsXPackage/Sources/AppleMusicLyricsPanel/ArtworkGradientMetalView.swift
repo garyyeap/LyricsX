@@ -3,7 +3,7 @@ import MetalKit
 
 extension AppleMusicLyrics {
     final class ArtworkGradientMetalView: MTKView, MTKViewDelegate {
-        private let configuration: ArtworkGradientConfiguration
+        private let drawableScale: CGFloat
         private let renderer: ArtworkBackdropRenderer
         private var isFrameRenderingAllowed = false
         private var isDrawableResizingSuspended = false
@@ -11,14 +11,13 @@ extension AppleMusicLyrics {
         init(
             frame frameRect: NSRect,
             device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration,
-            shaderLibrary: MTLLibrary? = nil
+            pipeline: any ArtworkBackdropFramePipeline,
+            drawableScale: CGFloat = 1
         ) throws {
-            self.configuration = configuration
+            self.drawableScale = drawableScale
             self.renderer = try ArtworkBackdropRenderer(
                 device: metalDevice,
-                configuration: configuration,
-                shaderLibrary: shaderLibrary
+                pipeline: pipeline
             )
 
             super.init(frame: frameRect, device: metalDevice)
@@ -34,9 +33,10 @@ extension AppleMusicLyrics {
             enableSetNeedsDisplay = false
             autoResizeDrawable = false
             presentsWithTransaction = false
-            clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.1, alpha: 1)
-            colorspace = nil
+            clearColor = pipeline.clearColor
+            colorspace = pipeline.drawableColorSpace
             isPaused = true
+            refreshDisplayEnvironment()
             updateDrawableSize()
         }
 
@@ -54,9 +54,21 @@ extension AppleMusicLyrics {
             updateDrawableSize()
         }
 
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            refreshDisplayEnvironment()
+        }
+
         override func viewDidChangeBackingProperties() {
             super.viewDidChangeBackingProperties()
+            refreshDisplayEnvironment()
             updateDrawableSize()
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            refreshDisplayEnvironment()
+            requestSingleFrame()
         }
 
         func setRenderingState(
@@ -128,12 +140,22 @@ extension AppleMusicLyrics {
             renderer.drawableSizeWillChange(size)
         }
 
+        private func refreshDisplayEnvironment() {
+            let backingScaleFactor = convertToBacking(NSSize(width: 1, height: 1)).width
+            let isDarkAppearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            renderer.setDisplayEnvironment(
+                backingScaleFactor: backingScaleFactor,
+                isDarkAppearance: isDarkAppearance
+            )
+        }
+
         private func updateDrawableSize() {
             guard !isDrawableResizingSuspended else { return }
 
             let nativeBackingBounds = convertToBacking(bounds)
-            let updatedDrawableSize = configuration.drawablePixelSize(
-                forNativeBackingSize: nativeBackingBounds.size
+            let updatedDrawableSize = ArtworkBackdropDrawableSizing.pixelSize(
+                forNativeBackingSize: nativeBackingBounds.size,
+                scale: drawableScale
             )
             guard drawableSize != updatedDrawableSize else { return }
             drawableSize = updatedDrawableSize

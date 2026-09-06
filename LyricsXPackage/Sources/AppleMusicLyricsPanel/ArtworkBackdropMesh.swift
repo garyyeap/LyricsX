@@ -29,14 +29,37 @@ extension AppleMusicLyrics {
             segmentCountPerDimension * segmentCountPerDimension * 6
         }
 
+        /// Vertices for the five-segment presets `TSLBackdropMetalView` uses;
+        /// any other base grid falls back to an unwarped identity surface.
         func makeVertices(meshVariant: Int = 1) -> [ArtworkBackdropMeshVertex] {
-            let vertexCountPerDimension = vertexCountPerDimension
-            let segmentCountPerDimension = segmentCountPerDimension
-            var controlPoints = if baseControlPointCount == 6 {
+            let controlPoints = if baseControlPointCount == 6 {
                 ArtworkBackdropMeshPresets.controlPoints(variant: meshVariant)
             } else {
                 identityControlPoints()
             }
+            return makeVertices(
+                sourceControlPoints: controlPoints.source,
+                destinationControlPoints: controlPoints.destination
+            )
+        }
+
+        /// Refines explicit source and destination control surfaces. Both
+        /// arrays hold `baseControlPointCount²` unit-square points in row-major
+        /// order; positions land in clip space as `2 × point − 1` while the
+        /// texture coordinate stays the regular grid position.
+        func makeVertices(
+            sourceControlPoints: [SIMD2<Float>],
+            destinationControlPoints: [SIMD2<Float>]
+        ) -> [ArtworkBackdropMeshVertex] {
+            let expectedControlPointCount = baseControlPointCount * baseControlPointCount
+            precondition(
+                sourceControlPoints.count == expectedControlPointCount
+                    && destinationControlPoints.count == expectedControlPointCount,
+                "Control surfaces must hold baseControlPointCount² points"
+            )
+            let vertexCountPerDimension = vertexCountPerDimension
+            let segmentCountPerDimension = segmentCountPerDimension
+            var controlPoints = (source: sourceControlPoints, destination: destinationControlPoints)
             var currentControlPointCount = baseControlPointCount
             for _ in 0 ..< subdivisionLevel {
                 controlPoints.source = Self.subdivide(

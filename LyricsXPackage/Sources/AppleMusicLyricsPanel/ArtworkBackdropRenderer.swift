@@ -112,27 +112,28 @@ extension AppleMusicLyrics {
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientFrame"
     )
+    /// Drives one `ArtworkBackdropFramePipeline` from `MTKView`'s display
+    /// cadence: owns the command queue, the artwork transition queue, the
+    /// pausable animation clock and the frame diagnostics, and hands the
+    /// pipeline a fully described frame context.
     final class ArtworkBackdropRenderer {
         let drawablePixelFormat: MTLPixelFormat
 
-        private let configuration: ArtworkGradientConfiguration
         private let metalDevice: MTLDevice
         private let commandQueue: MTLCommandQueue
-        private let pipeline: ArtworkBackdropPipeline
+        private let pipeline: any ArtworkBackdropFramePipeline
 
         private var transitionState: ArtworkBackdropTransitionState
         private var animationClock = ArtworkGradientAnimationClock()
-        private var compositionTexture: MTLTexture?
-        private var blurredTexture: MTLTexture?
-        private var gaussianBlur: MPSImageGaussianBlur?
+        private var backingScaleFactor: CGFloat = 1
+        private var isDarkAppearance = true
         private var frameTimingAccumulator = FrameTimingAccumulator()
         private var frameStageTimingAccumulator = GradientFrameStageTimingAccumulator()
         private var lastSlowFrameLogTimestamp: TimeInterval = -.infinity
 
         init(
             device metalDevice: MTLDevice,
-            configuration: ArtworkGradientConfiguration,
-            shaderLibrary: MTLLibrary? = nil
+            pipeline: any ArtworkBackdropFramePipeline
         ) throws {
             guard MPSSupportsMTLDevice(metalDevice) else {
                 throw ArtworkBackdropRendererCreationError
@@ -141,13 +142,7 @@ extension AppleMusicLyrics {
             guard let commandQueue = metalDevice.makeCommandQueue() else {
                 throw ArtworkBackdropRendererCreationError.unableToCreateCommandQueue
             }
-            let pipeline = try ArtworkBackdropPipeline(
-                device: metalDevice,
-                configuration: configuration,
-                shaderLibrary: shaderLibrary
-            )
 
-            self.configuration = configuration
             self.metalDevice = metalDevice
             self.commandQueue = commandQueue
             self.pipeline = pipeline
@@ -155,6 +150,14 @@ extension AppleMusicLyrics {
             self.transitionState = ArtworkBackdropTransitionState(
                 initialTextureState: pipeline.fallbackTextureState
             )
+        }
+
+        /// The display properties a pipeline's look depends on: Music's blur
+        /// radius is specified in points, and its darkening follows the
+        /// effective appearance.
+        func setDisplayEnvironment(backingScaleFactor: CGFloat, isDarkAppearance: Bool) {
+            self.backingScaleFactor = max(1, backingScaleFactor)
+            self.isDarkAppearance = isDarkAppearance
         }
 
         func setRenderingState(
@@ -231,9 +234,7 @@ extension AppleMusicLyrics {
         }
 
         func drawableSizeWillChange(_ drawableSize: CGSize) {
-            compositionTexture = nil
-            blurredTexture = nil
-            gaussianBlur = nil
+            pipeline.drawableSizeWillChange(drawableSize)
             #signpost(
                 .event,
                 "GradientDrawableSizeChanged",
@@ -267,13 +268,18 @@ extension AppleMusicLyrics.ArtworkBackdropRenderer {
         let animationTime = animationClock.elapsedTime(at: frameTimestamp)
         transitionState.advanceIfNeeded(
             animationTime: animationTime,
-            transitionDuration: configuration.artworkTransitionDuration
+            transitionDuration: pipeline.artworkTransitionDuration
         )
-        guard rebuildOffscreenResourcesIfNeeded(drawableSize: metalView.drawableSize),
-              let compositionTexture,
-              let blurredTexture,
-              let gaussianBlur
-        else {
+        let frameContext = AppleMusicLyrics.ArtworkBackdropFrameContext(
+            sourceTextureState: transitionState.sourceTextureState,
+            destinationTextureState: transitionState.destinationTextureState,
+            transitionProgress: transitionState.progress(at: animationTime),
+            animationTime: animationTime,
+            drawableSize: metalView.drawableSize,
+            backingScaleFactor: backingScaleFactor,
+            isDarkAppearance: isDarkAppearance
+        )
+        guard prepareResources(for: frameContext) else {
             return
         }
 
@@ -287,10 +293,7 @@ extension AppleMusicLyrics.ArtworkBackdropRenderer {
         let offscreenEncodingStartTimestamp = CACurrentMediaTime()
         guard encodeOffscreenFrame(
             commandBuffer: commandBuffer,
-            compositionTexture: compositionTexture,
-            blurredTexture: blurredTexture,
-            gaussianBlur: gaussianBlur,
-            animationTime: animationTime
+            context: frameContext
         ) else {
             return
         }
@@ -305,8 +308,7 @@ extension AppleMusicLyrics.ArtworkBackdropRenderer {
         guard encodeFinalFrame(
             commandBuffer: commandBuffer,
             renderPassDescriptor: frameTarget.renderPassDescriptor,
-            blurredTexture: blurredTexture,
-            animationTime: animationTime
+            context: frameContext
         ) else {
             return
         }
@@ -379,7 +381,7 @@ extension AppleMusicLyrics.ArtworkBackdropRenderer {
             textureState,
             animated: animated,
             animationTime: animationTime,
-            transitionDuration: configuration.artworkTransitionDuration
+            transitionDuration: pipeline.artworkTransitionDuration
         )
     }
 
@@ -412,166 +414,71 @@ extension AppleMusicLyrics.ArtworkBackdropRenderer {
 
     fileprivate func encodeOffscreenFrame(
         commandBuffer: MTLCommandBuffer,
-        compositionTexture: MTLTexture,
-        blurredTexture: MTLTexture,
-        gaussianBlur: MPSImageGaussianBlur,
-        animationTime: TimeInterval
+        context: AppleMusicLyrics.ArtworkBackdropFrameContext
     ) -> Bool {
         if AppleMusicLyrics.FramePerformanceDiagnosticsPolicy
             .detailedFrameSignpostingIsEnabled {
             return #signpostInterval("GradientOffscreenEncoding") {
-                encodeOffscreenCommands(
-                    commandBuffer: commandBuffer,
-                    compositionTexture: compositionTexture,
-                    blurredTexture: blurredTexture,
-                    gaussianBlur: gaussianBlur,
-                    animationTime: animationTime
-                )
+                pipeline.encodeOffscreenFrame(commandBuffer: commandBuffer, context: context)
             }
         }
-        return encodeOffscreenCommands(
-            commandBuffer: commandBuffer,
-            compositionTexture: compositionTexture,
-            blurredTexture: blurredTexture,
-            gaussianBlur: gaussianBlur,
-            animationTime: animationTime
-        )
-    }
-
-    fileprivate func encodeOffscreenCommands(
-        commandBuffer: MTLCommandBuffer,
-        compositionTexture: MTLTexture,
-        blurredTexture: MTLTexture,
-        gaussianBlur: MPSImageGaussianBlur,
-        animationTime: TimeInterval
-    ) -> Bool {
-        let transitionProgress = transitionState.progress(at: animationTime)
-        guard pipeline.encodeComposition(
-            commandBuffer: commandBuffer,
-            destinationTexture: compositionTexture,
-            sourceTextureState: transitionState.sourceTextureState,
-            destinationTextureState: transitionState.destinationTextureState,
-            transitionProgress: transitionProgress,
-            animationTime: animationTime
-        ) else {
-            return false
-        }
-        gaussianBlur.encode(
-            commandBuffer: commandBuffer,
-            sourceTexture: compositionTexture,
-            destinationTexture: blurredTexture
-        )
-        return true
+        return pipeline.encodeOffscreenFrame(commandBuffer: commandBuffer, context: context)
     }
 
     fileprivate func encodeFinalFrame(
         commandBuffer: MTLCommandBuffer,
         renderPassDescriptor: MTLRenderPassDescriptor,
-        blurredTexture: MTLTexture,
-        animationTime: TimeInterval
+        context: AppleMusicLyrics.ArtworkBackdropFrameContext
     ) -> Bool {
         if AppleMusicLyrics.FramePerformanceDiagnosticsPolicy
             .detailedFrameSignpostingIsEnabled {
             return #signpostInterval("GradientFinalEncoding") {
-                encodeFinalCommands(
+                pipeline.encodeFinalFrame(
                     commandBuffer: commandBuffer,
                     renderPassDescriptor: renderPassDescriptor,
-                    blurredTexture: blurredTexture,
-                    animationTime: animationTime
+                    context: context
                 )
             }
         }
-        return encodeFinalCommands(
+        return pipeline.encodeFinalFrame(
             commandBuffer: commandBuffer,
             renderPassDescriptor: renderPassDescriptor,
-            blurredTexture: blurredTexture,
-            animationTime: animationTime
+            context: context
         )
     }
 
-    fileprivate func encodeFinalCommands(
-        commandBuffer: MTLCommandBuffer,
-        renderPassDescriptor: MTLRenderPassDescriptor,
-        blurredTexture: MTLTexture,
-        animationTime: TimeInterval
+    fileprivate func prepareResources(
+        for context: AppleMusicLyrics.ArtworkBackdropFrameContext
     ) -> Bool {
-        pipeline.encodeFinalBackdrop(
-            commandBuffer: commandBuffer,
-            renderPassDescriptor: renderPassDescriptor,
-            blurredTexture: blurredTexture,
-            animationTime: animationTime,
-            averageLuminosity: transitionState.averageLuminosity(
-                at: animationTime
-            ),
-            configuration: configuration
-        )
-    }
-
-    fileprivate func rebuildOffscreenResourcesIfNeeded(drawableSize: CGSize) -> Bool {
-        let textureWidth = max(1, Int(drawableSize.width.rounded()))
-        let textureHeight = max(1, Int(drawableSize.height.rounded()))
-        if compositionTexture?.width == textureWidth,
-           compositionTexture?.height == textureHeight,
-           blurredTexture?.width == textureWidth,
-           blurredTexture?.height == textureHeight,
-           gaussianBlur != nil {
+        switch pipeline.prepareResources(for: context) {
+        case .ready:
+            return true
+        case .failed:
+            #log(.error, "Gradient offscreen resources could not be created")
+            return false
+        case .rebuilt:
+            let drawableWidth = context.drawableSize.width
+            let drawableHeight = context.drawableSize.height
+            let drawablePixelFormatRawValue = pipeline.drawablePixelFormat.rawValue
+            #log(
+                .info,
+                """
+                Gradient offscreen resources rebuilt width=\(drawableWidth, privacy: .public) \
+                height=\(drawableHeight, privacy: .public) \
+                backingScale=\(context.backingScaleFactor, privacy: .public) \
+                pixelFormat=\(drawablePixelFormatRawValue, privacy: .public)
+                """
+            )
+            #signpost(
+                .event,
+                "GradientOffscreenTexturesRebuilt",
+                """
+                width=\(drawableWidth, privacy: .public) \
+                height=\(drawableHeight, privacy: .public)
+                """
+            )
             return true
         }
-
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pipeline.drawablePixelFormat,
-            width: textureWidth,
-            height: textureHeight,
-            mipmapped: false
-        )
-        textureDescriptor.storageMode = .private
-        textureDescriptor.usage = [.renderTarget, .shaderRead, .shaderWrite]
-        guard let compositionTexture = metalDevice.makeTexture(
-            descriptor: textureDescriptor
-        ), let blurredTexture = metalDevice.makeTexture(
-            descriptor: textureDescriptor
-        ) else {
-            return false
-        }
-        compositionTexture.label = "Artwork Backdrop Composition Texture"
-        blurredTexture.label = "Artwork Backdrop Blurred Texture"
-
-        let textureDiagonal = hypot(Float(textureWidth), Float(textureHeight))
-        let blurSigma = max(
-            1,
-            floor(textureDiagonal * configuration.blurSigmaFraction)
-        )
-        let gaussianBlur = MPSImageGaussianBlur(
-            device: metalDevice,
-            sigma: blurSigma
-        )
-        gaussianBlur.options = AppleMusicLyrics.ArtworkBackdropRenderingProfile
-            .gaussianBlurOptions
-        gaussianBlur.edgeMode = AppleMusicLyrics.ArtworkBackdropRenderingProfile
-            .gaussianBlurEdgeMode
-
-        self.compositionTexture = compositionTexture
-        self.blurredTexture = blurredTexture
-        self.gaussianBlur = gaussianBlur
-        let drawablePixelFormatRawValue = pipeline.drawablePixelFormat.rawValue
-        #log(
-            .info,
-            """
-            Gradient offscreen textures rebuilt width=\(textureWidth, privacy: .public) \
-            height=\(textureHeight, privacy: .public) \
-            blurSigma=\(blurSigma, privacy: .public) \
-            pixelFormat=\(drawablePixelFormatRawValue, privacy: .public)
-            """
-        )
-        #signpost(
-            .event,
-            "GradientOffscreenTexturesRebuilt",
-            """
-            width=\(textureWidth, privacy: .public) \
-            height=\(textureHeight, privacy: .public)
-            """
-        )
-        return true
     }
 
     fileprivate func configureErrorReporting(for commandBuffer: MTLCommandBuffer) {

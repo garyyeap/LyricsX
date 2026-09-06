@@ -1,6 +1,6 @@
 # 0008 - 自绘 Metal 歌词渐变背景
 
-- **状态**: In Progress
+- **状态**: Implemented
 - **作者**: JH
 - **创建日期**: 2026-08-29
 - **最后更新**: 2026-09-05
@@ -224,3 +224,6 @@ artwork 进入 pending slot，避免中途跳色。运动完全由暂停感知�
 | 2026-08-31 | 单实例 cadence 修订 | 最新日志把大部分 frame 定位在 56.5–60 FPS，间歇 callback gap 为 48–128 ms，而同帧 Metal encoding 低于 0.6 ms；调研期间同时运行的两个 Debug app 与默认逐帧 signpost 会污染测量。本轮默认关闭逐帧 signpost，并对齐 Apple Music 的 blur options、非 sRGB output format 与“离屏编码后再取 drawable”顺序。提案保持 `In Progress`，等待单实例真实全屏复检。 |
 | 2026-08-31 | cadence 修订构建完成 | 新增回归测试先红后绿；52 项定向测试中 51 项通过，一个真实时间行内弹跳探针受并发负载影响失败，单独重跑通过。隔离 DerivedData 的 umbrella workspace Debug build 原始退出码为 0，四个 Metal function 均存在。已只启动这一份隔离 app，运行时 cadence 等待用户打开全屏歌词后复检。 |
 | 2026-09-05 | 用户批准背景视觉修复 | 根据 Music CPU 数据和本机 Metal 中间表示，补齐高亮限制、深色遮罩及通道下限，恢复三组旋转与双曲面插值；纠正 5×5 个单元被当成 5×5 个控制点的误读。具体实现与本轮验证记录见配套实现说明。保持现有 MTKView/MPS 调度架构，未启动应用做交互验证。 |
+| 2026-09-05 | 用户要求继续对齐 MiniPlayer 对照图 | 同歌截图仍显示颜色过艳、暗部过黑。确认 MiniPlayer 存在不同背景路径，不再把独立 Metal 渲染器默认值视为窗口最终外观；在现有最终 pass 中添加明确标注为截图校准的色彩与反差处理，并固定 sRGB 输出。保留现有动画和帧调度，新增封面采样的完整渲染回归；真实播放观感尚未验收，状态保持 In Progress。 |
+| 2026-09-05 | 对照目标更正，转入新草稿 | 用户的 Xcode 层级捕获证明对照窗口是 Music 26「正在播放」全窗口播放器，背景由 `MediaCoreUI.Backdrop.CompositeRenderer` 绘制，本提案复刻的 `TSLBackdropMetalView` 只用于 MiniPlayer 大封面态。截图校准判定为错误管线上的补丁，将在新草稿 [0010-apple-music-now-playing-backdrop](0010-apple-music-now-playing-backdrop.md) 落地时删除；本提案保持 In Progress，等新草稿接受后一并收尾。 |
+| 2026-09-05 | In Progress → Implemented | 新草稿 [0010-apple-music-now-playing-backdrop](0010-apple-music-now-playing-backdrop.md) 已落地：本提案的 `MTKView` 调度、生命周期暂停、过渡队列与诊断成为两条管线共用的驱动层；复刻 `TSLBackdropMetalView` 的管线以 `legacyTSL` 变体保留（去掉截图校准，恢复 `colorspace = nil` 与原始断言），默认变体改为 `MediaCoreUI` 管线。本提案不再承担「对齐 Apple Music 观感」的目标，剩余的真实观感复检记在新草稿下。 |
