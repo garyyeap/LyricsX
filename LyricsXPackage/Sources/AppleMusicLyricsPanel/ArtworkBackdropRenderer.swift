@@ -103,12 +103,12 @@ extension AppleMusicLyrics {
     }
 
     @Loggable(
-        isEnabled: false,
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientFrame"
     )
     @Signpostable(
-        isEnabled: false,
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
         subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
         category: "GradientFrame"
     )

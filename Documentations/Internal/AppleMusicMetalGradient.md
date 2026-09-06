@@ -175,8 +175,10 @@ sigma 为对角线 × 0.045394707 的模糊、6 × 6 控制点三级细分的网
   时冻结 drawable size；不创建自定义 timer，不直接调用 `nextDrawable()`。
 - `ArtworkGradientRenderingPolicy` 要求 view controller 已显示、view 附着在可见且未被遮挡的窗口、view 未隐藏、窗口不在
   自定义拖动、view 不在 live resize、Reduce Motion 未开启，才连续渲染；暂停时 `ArtworkGradientAnimationClock` 同时停止。
-- `#log` / `#signpost` 宏在当前工作树里是 `isEnabled: false`；开启后驱动器记录变体、渲染状态、资源重建、周期汇总、慢帧与
-  command buffer 错误，逐帧 signpost 只在 `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1` 时生成。
+- `#log` / `#signpost` 宏挂在面板的诊断总开关 `AppleMusicLyrics.PanelDiagnostics.isEnabled` 上，默认关闭；
+  `defaults write dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled -bool YES` 或环境变量 `LYRICSX_PANEL_DIAGNOSTICS=1`
+  打开后，驱动器记录变体、渲染状态、资源重建、周期汇总、慢帧与 command buffer 错误，逐帧 signpost 只在
+  `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1` 时生成。
 
 ## 失败降级
 

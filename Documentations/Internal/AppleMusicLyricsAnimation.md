@@ -385,6 +385,20 @@ transitive import。
   signpost 测量 animation scheduling 本身；render server 后续插值不在这个区间内。`Line advance` 带
   `variant=`，被推迟与追上的切行分别记为 `Line change deferred` 与 `Deferred line change applied`。
 
+这些日志和 signpost 默认全部关闭。面板里每个 `@Loggable` / `@Signpostable` 类型的 `isEnabled:` 都传
+`AppleMusicLyrics.PanelDiagnostics.isEnabled`（表达式形式，宏在每个调用点求值并与 `LoggingControl` /
+`SignpostingControl` 的运行时开关合并），这个总开关在首次使用时读取一次，满足其一即打开：
+
+```bash
+# 运行中的 Debug 构建：写入后重启应用
+defaults write dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled -bool YES
+defaults delete dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled            # 关闭
+# 或在 Xcode scheme / 命令行环境里
+LYRICSX_PANEL_DIAGNOSTICS=1
+```
+
+逐帧阶段 signpost 另有更细的 `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1`，只在总开关打开时有意义。
+
 可在问题出现后直接读取最近记录，不需要把 profiler 附加到 App：
 
 ```bash
