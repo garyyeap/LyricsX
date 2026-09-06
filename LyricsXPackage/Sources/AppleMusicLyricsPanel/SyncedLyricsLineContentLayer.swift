@@ -26,13 +26,13 @@ extension AppleMusicLyrics {
     /// Built from `sub_100169AC8` (the line), `sub_10018C12C` (the word) and
     /// `sub_10018B2B4` (the emphasis schedule).
     @Loggable(
-        isEnabled: false,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isKaraokeEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "InlineKaraoke"
     )
     @Signpostable(
-        isEnabled: false,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isKaraokeEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "InlineKaraoke"
     )
     final class SyncedLyricsLineContentLayer: CALayer {
@@ -80,6 +80,8 @@ extension AppleMusicLyrics {
             /// One of Music's `SyllableLayer`s: the glyphs that rise together
             /// when their syllable turns sung. Only structured words have these.
             struct SyllableGroup {
+                /// The syllable's own characters, for the diagnostics trace.
+                let text: String
                 let timeRange: Range<TimeInterval>
                 /// Indices into the owning node's `glyphLayers`.
                 let glyphIndices: [Int]
@@ -176,6 +178,9 @@ extension AppleMusicLyrics {
         private var visualRowNodes: [VisualRowNode] = []
         private var wordNodes: [WordNode] = []
         private var layout: LineTextLayout?
+        /// The first characters of the current line, so every diagnostics
+        /// event below reads back to its lyric without an index.
+        private var lineLabel = ""
         private var precedingElapsedTime: TimeInterval?
         private static let maximumContinuousElapsedTimeStep: TimeInterval = 0.5
         /// Cumulative text width before each visual row, so the sweep cascades row
@@ -258,17 +263,52 @@ extension AppleMusicLyrics {
                 partialCount + wordNode.glyphLayers.count
             }
             let renderedWordCount = wordNodes.count
+            lineLabel = Self.makeLineLabel(for: layout)
+            let currentLineLabel = lineLabel
+            let languageIdentifier = layout.languageIdentifier ?? "-"
+            let wordSummary = Self.makeWordSummary(for: layout)
             #log(
                 .info,
                 """
-                Line layer rebuilt visualRowCount=\(rowCount, privacy: .public) \
+                Line layer rebuilt line=\(currentLineLabel, privacy: .public) \
+                language=\(languageIdentifier, privacy: .public) \
+                visualRowCount=\(rowCount, privacy: .public) \
                 wordCount=\(renderedWordCount, privacy: .public) \
                 glyphCount=\(renderedGlyphCount, privacy: .public) \
                 contentsScale=\(contentsScale, privacy: .public) \
                 width=\(layout.contentSize.width, privacy: .public) \
-                height=\(layout.contentSize.height, privacy: .public)
+                height=\(layout.contentSize.height, privacy: .public) \
+                words=\(wordSummary, privacy: .public)
                 """
             )
+        }
+
+        private static func makeLineLabel(for layout: LineTextLayout) -> String {
+            let lineText = layout.words.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            return String(lineText.prefix(24))
+        }
+
+        /// One entry per word: its text, its time range in seconds from the line
+        /// start, `s` for structured (synchronized) timing or `i` for the inline
+        /// tag fallback, and the syllable count when there is more than one.
+        private static func makeWordSummary(for layout: LineTextLayout) -> String {
+            layout.words.map { word -> String in
+                let wordText = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let timeRange = word.timeRange else { return "\(wordText)[untimed]" }
+                let source = word.timingSource == .synchronized ? "s" : "i"
+                let syllableSuffix = word.syllables.count > 1 ? "/\(word.syllables.count)syl" : ""
+                let start = Self.formatSeconds(timeRange.lowerBound)
+                let end = Self.formatSeconds(timeRange.upperBound)
+                return "\(wordText)[\(start)-\(end)\(source)\(syllableSuffix)]"
+            }.joined(separator: " ")
+        }
+
+        private static func formatSeconds(_ value: TimeInterval) -> String {
+            String(format: "%.3f", value)
+        }
+
+        private static func formatSeconds(_ values: [TimeInterval]) -> String {
+            values.map(formatSeconds).joined(separator: ",")
         }
 
         private func makeWordNode(for word: LineTextLayout.Word, contentsScale: CGFloat) -> WordNode {
@@ -338,11 +378,30 @@ extension AppleMusicLyrics {
         /// Inline-tag words keep the established full-emphasis look and get none.
         private static func makeSyllableGroups(for word: LineTextLayout.Word) -> [WordNode.SyllableGroup] {
             guard word.timingSource == .synchronized, let timeRange = word.timeRange else { return [] }
+            let wordCharacters = Array(word.text)
             let groups = word.syllables
                 .filter { !$0.glyphIndices.isEmpty }
-                .map { WordNode.SyllableGroup(timeRange: $0.timeRange, glyphIndices: $0.glyphIndices) }
+                .map { syllable -> WordNode.SyllableGroup in
+                    let lowerBound = max(0, syllable.characterRange.lowerBound - word.characterRange.lowerBound)
+                    let upperBound = min(
+                        wordCharacters.count,
+                        syllable.characterRange.upperBound - word.characterRange.lowerBound
+                    )
+                    let syllableText = lowerBound < upperBound
+                        ? String(wordCharacters[lowerBound ..< upperBound])
+                        : word.text
+                    return WordNode.SyllableGroup(
+                        text: syllableText,
+                        timeRange: syllable.timeRange,
+                        glyphIndices: syllable.glyphIndices
+                    )
+                }
             if groups.isEmpty, !word.glyphs.isEmpty {
-                return [WordNode.SyllableGroup(timeRange: timeRange, glyphIndices: Array(word.glyphs.indices))]
+                return [WordNode.SyllableGroup(
+                    text: word.text,
+                    timeRange: timeRange,
+                    glyphIndices: Array(word.glyphs.indices)
+                )]
             }
             return groups
         }
@@ -455,10 +514,12 @@ extension AppleMusicLyrics {
         private func synchronizeEmphasisState(forElapsedTime elapsedTime: TimeInterval) {
             let previousElapsedTime = precedingElapsedTime ?? -1
             let synchronizedWordCount = wordNodes.count
+            let currentLineLabel = lineLabel
             #log(
                 .info,
                 """
-                Emphasis state synchronized elapsedTime=\(elapsedTime, privacy: .public) \
+                Emphasis state synchronized line=\(currentLineLabel, privacy: .public) \
+                elapsedTime=\(elapsedTime, privacy: .public) \
                 previousElapsedTime=\(previousElapsedTime, privacy: .public) \
                 wordCount=\(synchronizedWordCount, privacy: .public)
                 """
@@ -529,11 +590,17 @@ extension AppleMusicLyrics {
             node.emphasisDecision = decision
             if plan == nil {
                 let characterCount = node.word.characterRange.count
+                let currentLineLabel = lineLabel
+                let wordText = node.word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let syllableCount = node.syllableGroups.count
                 #log(
                     .debug,
                     """
-                    Word emphasis withheld characterCount=\(characterCount, privacy: .public) \
-                    duration=\(duration, privacy: .public) syllablesLiftOnTheirOwn=true
+                    Word emphasis withheld line=\(currentLineLabel, privacy: .public) \
+                    text=\(wordText, privacy: .public) \
+                    characterCount=\(characterCount, privacy: .public) \
+                    duration=\(duration, privacy: .public) \
+                    syllableCount=\(syllableCount, privacy: .public) syllablesLiftOnTheirOwn=true
                     """
                 )
             }
@@ -555,12 +622,37 @@ extension AppleMusicLyrics {
                     let shouldBeLifted = elapsedTime >= node.syllableGroups[index].timeRange.lowerBound
                     guard shouldBeLifted != node.syllableGroups[index].isLifted else { continue }
                     node.syllableGroups[index].isLifted = shouldBeLifted
-                    moveSyllable(node.syllableGroups[index], of: node, lifted: shouldBeLifted)
+                    moveSyllable(
+                        node.syllableGroups[index],
+                        of: node,
+                        lifted: shouldBeLifted,
+                        elapsedTime: elapsedTime
+                    )
                 }
             }
         }
 
-        private func moveSyllable(_ group: WordNode.SyllableGroup, of node: WordNode, lifted: Bool) {
+        private func moveSyllable(
+            _ group: WordNode.SyllableGroup,
+            of node: WordNode,
+            lifted: Bool,
+            elapsedTime: TimeInterval
+        ) {
+            let currentLineLabel = lineLabel
+            let syllableText = group.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let firstGlyphIndex = group.glyphIndices.first ?? -1
+            let lastGlyphIndex = group.glyphIndices.last ?? -1
+            let syllableStart = group.timeRange.lowerBound
+            let motion = lifted ? "lifted" : "lowered"
+            #log(
+                .debug,
+                """
+                Syllable \(motion, privacy: .public) line=\(currentLineLabel, privacy: .public) \
+                text=\(syllableText, privacy: .public) \
+                glyphs=\(firstGlyphIndex, privacy: .public)-\(lastGlyphIndex, privacy: .public) \
+                start=\(syllableStart, privacy: .public) elapsedTime=\(elapsedTime, privacy: .public)
+                """
+            )
             let glyphLayers = group.glyphIndices.map { node.glyphLayers[$0] }
             let animator = LayerPropertyAnimator(layers: glyphLayers, timing: SyllableLiftPlan.springTiming)
             animator.addChange {
@@ -588,17 +680,25 @@ extension AppleMusicLyrics {
                 period: plan.springPeriod
             )
             let timingSourceName = node.word.timingSource == .synchronized ? "synchronized" : "inferred"
+            let currentLineLabel = lineLabel
+            let wordText = node.word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let riseDelaySummary = Self.formatSeconds(plan.riseDelays)
+            let returnDelaySummary = Self.formatSeconds(plan.returnDelays)
             #log(
                 .debug,
                 """
-                Word emphasis scheduled characterCount=\(node.word.characterRange.count, privacy: .public) \
+                Word emphasis scheduled line=\(currentLineLabel, privacy: .public) \
+                text=\(wordText, privacy: .public) \
+                characterCount=\(node.word.characterRange.count, privacy: .public) \
                 glyphCount=\(glyphCount, privacy: .public) \
                 duration=\(duration, privacy: .public) \
                 timingSource=\(timingSourceName, privacy: .public) \
                 policy=\(structuredEmphasisPolicy.rawValue, privacy: .public) \
                 scale=\(plan.scale, privacy: .public) \
                 springPeriod=\(plan.springPeriod, privacy: .public) \
-                glowOpacity=\(plan.glowOpacity, privacy: .public)
+                glowOpacity=\(plan.glowOpacity, privacy: .public) \
+                riseDelays=\(riseDelaySummary, privacy: .public) \
+                returnDelays=\(returnDelaySummary, privacy: .public)
                 """
             )
             #signpost(
@@ -688,8 +788,17 @@ extension AppleMusicLyrics {
         ) {
             node.pendingGlyphReturns.forEach { $0.cancel() }
             node.pendingGlyphReturns = node.glyphLayers.enumerated().map { glyphIndex, glyphLayer in
-                let work = DispatchWorkItem { [weak node, weak glyphLayer] in
-                    guard let node, let glyphLayer else { return }
+                let work = DispatchWorkItem { [weak self, weak node, weak glyphLayer] in
+                    guard let self, let node, let glyphLayer else { return }
+                    let currentLineLabel = self.lineLabel
+                    let wordText = node.word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    #log(
+                        .debug,
+                        """
+                        Glyph return started line=\(currentLineLabel, privacy: .public) \
+                        text=\(wordText, privacy: .public) glyphIndex=\(glyphIndex, privacy: .public)
+                        """
+                    )
                     let sungOrigin = node.sungOrigin(ofGlyphAt: glyphIndex)
                     let animator = LayerPropertyAnimator(layers: [glyphLayer], timing: spring)
                     animator.addChange {
@@ -732,9 +841,13 @@ extension AppleMusicLyrics {
         func resetEmphasis() {
             if wordNodes.contains(where: { $0.isEmphasisScheduled }) {
                 let emphasisWordCount = wordNodes.count
+                let currentLineLabel = lineLabel
                 #log(
                     .debug,
-                    "Emphasis reset wordCount=\(emphasisWordCount, privacy: .public)"
+                    """
+                    Emphasis reset line=\(currentLineLabel, privacy: .public) \
+                    wordCount=\(emphasisWordCount, privacy: .public)
+                    """
                 )
                 #signpost(.event, "EmphasisReset")
             }

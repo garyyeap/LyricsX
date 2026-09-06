@@ -103,13 +103,13 @@ extension AppleMusicLyrics {
     }
 
     @Loggable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isBackdropEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Backdrop",
         category: "GradientFrame"
     )
     @Signpostable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isBackdropEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Backdrop",
         category: "GradientFrame"
     )
     /// Drives one `ArtworkBackdropFramePipeline` from `MTKView`'s display

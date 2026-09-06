@@ -9,13 +9,13 @@ import OSToolbox
 
 extension AppleMusicLyrics {
     @Loggable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LyricsFrame"
     )
     @Signpostable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LyricsFrame"
     )
     final class SyncedLyricsContainerView: NSView {

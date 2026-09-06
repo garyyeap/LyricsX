@@ -5,13 +5,13 @@ import UIFoundation
 
 extension AppleMusicLyrics {
     @Loggable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isBackdropEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Backdrop",
         category: "GradientRenderer"
     )
     @Signpostable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isBackdropEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Backdrop",
         category: "GradientRenderer"
     )
     final class GradientBackgroundView: NSView {

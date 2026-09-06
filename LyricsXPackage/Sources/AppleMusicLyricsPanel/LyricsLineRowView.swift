@@ -19,13 +19,13 @@ extension AppleMusicLyrics {
     /// sung/un-sung gradient sweeps *outside* it, and a single drawing pass cannot
     /// separate the two. Everything visual now lives in the layer tree.
     @Loggable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LyricsLine"
     )
     @Signpostable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LyricsLine"
     )
     final class SyncedLyricsLineView: NSView {
@@ -302,10 +302,12 @@ extension AppleMusicLyrics {
                 let renderedGlyphCount = layout.words.reduce(0) { partialCount, word in
                     partialCount + word.glyphs.count
                 }
+                let lineText = line.content
                 #log(
                     .info,
                     """
                     Line layout built originalIndex=\(lineOriginalIndex, privacy: .public) \
+                    text=\(lineText, privacy: .public) \
                     characterCount=\(line.content.count, privacy: .public) \
                     visualRowCount=\(layout.visualLines.count, privacy: .public) \
                     wordCount=\(layout.words.count, privacy: .public) \

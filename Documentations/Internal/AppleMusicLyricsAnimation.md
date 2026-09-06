@@ -377,9 +377,10 @@ row spacing，也没有保留额外 viewport inset。
 
 ## 性能诊断
 
-歌词动画使用 `com.JH.LyricsX.AppleMusicLyricsPanel` subsystem，并把不同边界分到四个 category。实现依赖
-FrameworkToolbox 0.10.0 的 `OSToolbox`，由 `AppleMusicLyricsPanel` target 直接导入，避免依赖其它模块的
-transitive import。
+歌词动画使用 `com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics` subsystem，并把不同边界分到四个 category；背景
+渲染单独用 `com.JH.LyricsX.AppleMusicLyricsPanel.Backdrop`（见 `AppleMusicMetalGradient.md`），这样在 Console
+里按 subsystem 过滤就能把歌词动画和背景的记录分开看。实现依赖 FrameworkToolbox 0.10.0 的 `OSToolbox`，由
+`AppleMusicLyricsPanel` target 直接导入，避免依赖其它模块的 transitive import。
 
 - `LyricsFrame` 每两秒汇总一次 display-link source cadence 与 main queue arrival cadence，同时记录
   nominal frames per second、两侧漏帧数、最大 frame gap、最大 delivery lateness，以及当前歌词长度与
@@ -388,34 +389,53 @@ transitive import。
   signpost 分别覆盖播放器状态读取、间奏状态更新和当前歌词行更新。source 保持 60、main arrival 出现
   30 FPS 式空档，但歌词工作耗时仍很低，表示 main thread 在两个歌词 callback 之间被其它工作阻塞；
   两侧 cadence 一起下降才应继续检查 display scheduling 本身。
-- `LyricsLine` 记录 layout 重建的 visual row、word、glyph 数量，以及 blur radius 的每次目标变化。
-- `InlineKaraoke` 用 signpost 包围每次 sweep update，并在 word emphasis、seek 后状态同步和 reset 时发出
-  event；可用它确认快速歌词是否在同一 frame 批量安排了过多 glyph animation。每条
-  `Word emphasis scheduled` 都带 `timingSource=` 与 `policy=`，从 `scale=` 和 `glowOpacity=` 就能看出
-  这个词走的是哪条路径、哪档策略。
+- `LyricsLine` 记录 layout 重建的 visual row、word、glyph 数量（`Line layout built` 带整行 `text=`），以及
+  blur radius 的每次目标变化。
+- `InlineKaraoke` 是行内动画的逐事件追踪，归 `karaoke` 组，每个事件一行，都带 `line=`（该行前 24 个字）：
+  - `Line layer rebuilt`：`language=` 与 `words=` 词表，每个词写成 `文本[起-止s]` 或 `文本[起-止i]`，`s`
+    是结构化时间轴、`i` 是行内 `[tt]` 回退，多音节词再带 `/N syl`。看这一行就知道这首歌每个词走哪条路。
+  - `Word emphasis scheduled`：走 swell 的词，带 `text=`、`timingSource=`、`policy=`、`scale=`、
+    `glowOpacity=`，以及逐字的 `riseDelays=` / `returnDelays=`。
+  - `Word emphasis withheld`：Music 判为 `.none` 的词，带 `text=` 与 `syllableCount=`。
+  - `Syllable lifted` / `Syllable lowered`：逐音节抬高与倒带回落，带音节 `text=`、`glyphs=` 区间、
+    `start=` 与触发时的 `elapsedTime=`。
+  - `Glyph return started`：swell 词每个字开始收回的时刻。
+  - `Emphasis state synchronized`（seek 或时间跳变后的重同步）与 `Emphasis reset`。
+  另有 signpost 包围每次 sweep update，可用它确认快速歌词是否在同一 frame 批量安排了过多 glyph animation。
 - `LineTransition` 记录 clip spring、row cascade 的 displacement、参与行数、delay 与 settle 时长，并用
   signpost 测量 animation scheduling 本身；render server 后续插值不在这个区间内。`Line advance` 带
   `variant=`，被推迟与追上的切行分别记为 `Line change deferred` 与 `Deferred line change applied`。
 
-这些日志和 signpost 默认全部关闭。面板里每个 `@Loggable` / `@Signpostable` 类型的 `isEnabled:` 都传
-`AppleMusicLyrics.PanelDiagnostics.isEnabled`（表达式形式，宏在每个调用点求值并与 `LoggingControl` /
-`SignpostingControl` 的运行时开关合并），这个总开关在首次使用时读取一次，满足其一即打开：
+这些日志和 signpost 默认全部关闭，按三组开启。面板里每个 `@Loggable` / `@Signpostable` 类型的 `isEnabled:`
+都传 `AppleMusicLyrics.PanelDiagnostics` 里自己那组的开关（表达式形式，宏在每个调用点求值并与
+`LoggingControl` / `SignpostingControl` 的运行时开关合并），开关值在首次使用时读取一次，环境变量优先于
+defaults 键：
+
+- `lyrics`：`LyricsFrame`、`LyricsLine`、`LineTransition`；
+- `karaoke`：`InlineKaraoke` 逐事件追踪，量大，只在查行内动画时开；
+- `backdrop`：背景渲染（`GradientRenderer`、`GradientFrame`）。
+
+值写 `1` / `true` / `all` 是全开，写 `0` / `off` 是全关，其余按逗号或空格分隔的组名解析，不认识的名字忽略：
 
 ```bash
 # 运行中的 Debug 构建：写入后重启应用
-defaults write dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled -bool YES
+defaults write dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled -string lyrics,karaoke
+defaults write dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled -bool YES   # 全开
 defaults delete dev.JH.LyricsX AppleMusicLyricsDiagnosticsEnabled            # 关闭
 # 或在 Xcode scheme / 命令行环境里
-LYRICSX_PANEL_DIAGNOSTICS=1
+LYRICSX_PANEL_DIAGNOSTICS=lyrics,karaoke
 ```
 
-逐帧阶段 signpost 另有更细的 `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1`，只在总开关打开时有意义。
+逐帧阶段 signpost 另有更细的 `LYRICSX_DETAILED_FRAME_SIGNPOSTS=1`，只在 `lyrics` 组打开时有意义。
 
-可在问题出现后直接读取最近记录，不需要把 profiler 附加到 App：
+可在问题出现后直接读取最近记录，不需要把 profiler 附加到 App；按 subsystem 过滤就不会被背景日志淹没：
 
 ```bash
 /usr/bin/log show --last 2m --info --debug --signpost --style compact \
-  --predicate 'subsystem == "com.JH.LyricsX.AppleMusicLyricsPanel"'
+  --predicate 'subsystem == "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics"'
+# 只看行内动画的逐事件追踪
+/usr/bin/log show --last 2m --info --debug --style compact \
+  --predicate 'subsystem == "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics" AND category == "InlineKaraoke"'
 ```
 
 并排比较两档 cascade 或两档行内策略时，播放中直接改隐藏键即可，下一次切行或下一个词生效：
@@ -428,8 +448,8 @@ defaults delete dev.JH.LyricsX AppleMusicLyricsCascadeVariant                # �
 
 Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按默认档处理。
 
-逐帧路径只写低开销 signpost；可读 `#log` 均为低频汇总或状态转换，不能改成每帧字符串日志，否则诊断
-本身会改变 frame pacing。
+逐帧路径只写低开销 signpost；可读 `#log` 均为低频汇总、状态转换或逐事件记录（一个音节抬高一行，而不是
+一帧一行），不能改成每帧字符串日志，否则诊断本身会改变 frame pacing。
 
 ## 与提案的差异和已知边界
 
@@ -462,6 +482,10 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
 - 本次没有获得交互式 UI 验证授权，因此没有启动应用；位置与流畅度判断使用用户提供的 Apple Music
   对比录屏，自动化 probe 验证 layer 层级、模型终点、presentation continuity、spring 参数、
   relative baseline、换行顺序与 rasterization 生命周期。
+- 非结构化来源（Kugou、网易云等的 `[tt]` 行内标签）仍走 `.inferred` 的全强度 swell：因子 1、逐字 rise 后
+  return、按 phrase 分组，没有 0011 的逐音节抬高。2026-09-06 用户把这个观感描述为「一上一下」，与结构化
+  歌词的「掀布」对比明显（当时播的是 Kugou 版 STAY，不是语言差异）；`[tt]` 段是否按 Music 的音节处理，
+  待单独提案决定。
 
 ### 2026-09-05 修正：唱过的字保持抬高，而不是落回原位
 
@@ -704,6 +728,23 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
 - 文档判断：更新本篇的原版调用链、参数公式、两档策略表、首行坐标补偿与验证记录；既有提案保留为
   当时的决策快照，不把旧结论当成当前实现。没有新增需要登记的项目术语。
 - 未启动应用做交互式 UI 验证，也未运行 `xctrace`；本次验证不构成实际观感或全屏帧率测量。
+
+### 2026-09-06 诊断分组与行内动画逐事件追踪
+
+- 现象：用户看日志时被背景渲染（`GradientFrame`）的记录淹没；同时要查的行内动画在日志里一条记录都没有，
+  因为 `SyncedLyricsLineContentLayer` 的 `InlineKaraoke` 自 9eb7f37 起 `isEnabled:` 是编译期 `false`，
+  b9eb1dc 的总开关没有覆盖它。
+- 改法：subsystem 拆成 `com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics` 与 `.Backdrop`；`PanelDiagnostics` 由单个
+  布尔改为 `lyrics` / `karaoke` / `backdrop` 三组，环境变量与 defaults 键都接受 `1` / `all` / 组名列表，
+  旧的布尔写法仍是全开；`InlineKaraoke` 改挂 `karaoke` 组，并补齐逐事件记录：每行的词表（文本、起止、
+  `s` / `i` 来源、音节数）、每个词的 swell 判定与逐字 rise / return 延迟、每个音节的抬高与回落（带
+  `elapsedTime`）、每个字的收回时刻、重同步与 reset，都带 `line=` 前缀；`LyricsLine` 的
+  `Line layout built` 带整行文本。
+- 验证：`PanelDiagnosticsTests` 5 项覆盖默认关闭、全开、组列表、defaults 字符串与布尔、环境变量优先级；
+  `LyricsXPackage` 全量 178 项 / 26 suite `--no-parallel` 退出码 0；工作区 LyricsX Debug 隔离构建成功；
+  SwiftFormat lint 无差异。
+- 文档判断：更新本节上方「性能诊断」与 `AppleMusicMetalGradient.md` 的诊断段；没有新增需要登记的项目术语。
+- 未启动应用做交互式验证；新增追踪的实际输出待下次播放后用 `log show` 读取。
 
 ## 以后重做版本核对时
 

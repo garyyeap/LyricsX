@@ -39,13 +39,13 @@ extension AppleMusicLyrics {
     /// single owner of every model frame.
     @MainActor
     @Loggable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LineTransition"
     )
     @Signpostable(
-        isEnabled: AppleMusicLyrics.PanelDiagnostics.isEnabled,
-        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel",
+        isEnabled: AppleMusicLyrics.PanelDiagnostics.isLyricsEnabled,
+        subsystem: "com.JH.LyricsX.AppleMusicLyricsPanel.Lyrics",
         category: "LineTransition"
     )
     final class LineTransitionCoordinator {
