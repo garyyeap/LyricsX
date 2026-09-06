@@ -63,10 +63,33 @@ extension AppleMusicLyrics {
         // MARK: Layers
 
         private let contentLayer = SyncedLyricsLineContentLayer()
+        /// The content layer is hosted by a flipped view rather than added to
+        /// this view's backing layer by hand. `LineTextLayout` produces y-down
+        /// coordinates, and only AppKit knows which layers in the ancestry carry
+        /// `isGeometryFlipped`: it puts the flag wherever flippedness changes
+        /// between a view and its superview (on the NSScrollView's layer inside
+        /// the panel, on this row's own layer when the row is hosted alone) and
+        /// re-applies it at commit time, so a layer we position ourselves can
+        /// only guess the parity — and both guesses this code has made
+        /// (`!layer.isGeometryFlipped`, then a hard-coded `true` in 8445f2e)
+        /// reversed the wrapped rows once the ancestry changed. A layer-hosting
+        /// flipped view hands the orientation to AppKit for good.
+        private let contentHostView = ContentHostView()
+
+        private final class ContentHostView: NSView {
+            override var isFlipped: Bool {
+                true
+            }
+
+            /// Clicks belong to the row.
+            override func hitTest(_ point: NSPoint) -> NSView? {
+                nil
+            }
+        }
 
         // MARK: Layout constants
 
-        private let verticalPadding: CGFloat = 28
+        let verticalPadding: CGFloat = 28
         private let horizontalPadding: CGFloat = 24
         private let mainToTranslationSpacing: CGFloat = 4
         /// The active line's not-yet-sung text sits at 50% white
@@ -82,7 +105,9 @@ extension AppleMusicLyrics {
             super.init(frame: frameRect)
             wantsLayer = true
             layerContentsRedrawPolicy = .onSetNeedsDisplay
-            layer?.addSublayer(contentLayer)
+            contentHostView.layer = contentLayer
+            contentHostView.wantsLayer = true
+            addSubview(contentHostView)
             updateRasterization()
         }
 
@@ -221,21 +246,17 @@ extension AppleMusicLyrics {
         override func layout() {
             super.layout()
             buildLayoutIfNeeded(forWidth: bounds.width)
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            // `LineTextLayout` has already converted Core Text's coordinates into
-            // a y-down space. Keep that contract deterministic for this custom
-            // sublayer; deriving it from AppKit's backing-layer projection reverses
-            // the visual row order whenever a lyric wraps.
-            contentLayer.isGeometryFlipped = true
-            contentLayer.anchorPoint = .zero
-            // The layer is bigger than the text it holds — see `textOutset` — so
-            // back the origin off by that much to put the *text* on the padding.
-            contentLayer.position = CGPoint(
+            // The host is a flipped view inside a flipped view, so this frame is
+            // y-down like everything else here; AppKit turns it into the hosted
+            // layer's geometry and keeps that layer effectively y-down. The layer
+            // is bigger than the text it holds — see `textOutset` — so back the
+            // origin off by that much to put the *text* on the padding.
+            contentHostView.frame = NSRect(
                 x: horizontalPadding - contentLayer.textOutset.width,
-                y: verticalPadding - contentLayer.textOutset.height
+                y: verticalPadding - contentLayer.textOutset.height,
+                width: contentLayer.bounds.width,
+                height: contentLayer.bounds.height
             )
-            CATransaction.commit()
         }
 
         /// Lay the main text out and rebuild the layer tree. Cached by width, and

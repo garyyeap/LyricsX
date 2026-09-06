@@ -199,16 +199,30 @@ struct LineEmphasisStructureProbes {
             translationFontSize: 18
         )
         lineView.frame.size.height = lineView.preferredHeight(forWidth: rowWidth)
+        // AppKit decides the hosted content layer's orientation at commit time,
+        // so the row has to live in a window and the transaction has to land
+        // before the orientation means anything.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: rowWidth, height: 400),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        try #require(window.contentView).addSubview(lineView)
         lineView.layoutSubtreeIfNeeded()
+        CATransaction.flush()
 
+        // The content layer is the layer of a hosting subview, so reach it
+        // through the view rather than through the row's own sublayer list.
         let contentLayer = try #require(
-            lineView.layer?.sublayers?.compactMap {
-                $0 as? AppleMusicLyrics.SyncedLyricsLineContentLayer
+            lineView.subviews.compactMap {
+                $0.layer as? AppleMusicLyrics.SyncedLyricsLineContentLayer
             }.first
         )
         #expect(
-            contentLayer.isGeometryFlipped,
-            "the content layer must preserve the y-down coordinates produced by LineTextLayout"
+            contentLayer.contentsAreFlipped(),
+            "the content layer must be effectively y-down, the space LineTextLayout produces its frames in"
         )
         let visualRowColorContainers = Self.visualRowColorContainers(of: contentLayer)
         #expect(visualRowColorContainers.count == layout.visualLines.count)

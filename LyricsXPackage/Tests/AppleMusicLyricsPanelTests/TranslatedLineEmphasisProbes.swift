@@ -33,7 +33,8 @@ struct TranslatedLineEmphasisProbes {
     private struct LineTrace {
         let label: String
         let rowHeight: CGFloat
-        let contentLayerPosition: CGPoint
+        /// Distance from the row's top edge to the content layer's top edge.
+        let contentTopInset: CGFloat
         let glyphCount: Int
         let tracks: [[GlyphSample]]
     }
@@ -44,7 +45,7 @@ struct TranslatedLineEmphasisProbes {
 
         #expect(translated.glyphCount == untranslated.glyphCount)
         #expect(translated.rowHeight > untranslated.rowHeight, "the translated row must be taller")
-        #expect(translated.contentLayerPosition == untranslated.contentLayerPosition)
+        #expect(abs(translated.contentTopInset - untranslated.contentTopInset) < 0.001, "the translation sits below the main text, it must not move it")
 
         let divergences = Self.divergences(between: translated, and: untranslated, tolerance: 0.5)
         #expect(
@@ -149,7 +150,7 @@ struct TranslatedLineEmphasisProbes {
         return LineTrace(
             label: label,
             rowHeight: rowHeight,
-            contentLayerPosition: contentLayer.position,
+            contentTopInset: Self.topInset(of: contentLayer),
             glyphCount: glyphLayers.count,
             tracks: tracks
         )
@@ -181,6 +182,15 @@ struct TranslatedLineEmphasisProbes {
             }
         }
         return divergences
+    }
+
+    /// Where the content layer's top edge sits below the row's top edge, read
+    /// through Core Animation so it is right whichever way up the row's backing
+    /// layer is.
+    private static func topInset(of contentLayer: CALayer) -> CGFloat {
+        guard let rowLayer = contentLayer.superlayer else { return .nan }
+        let frameInRow = contentLayer.convert(contentLayer.bounds, to: rowLayer)
+        return rowLayer.contentsAreFlipped() ? frameInRow.minY : rowLayer.bounds.height - frameInRow.maxY
     }
 
     private static func writeTraceIfRequested(_ traces: [LineTrace]) {

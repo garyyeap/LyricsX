@@ -278,12 +278,24 @@ Apple Music 的 `SyncedLyricsLineLayer.init`（`sub_1001A5294`）设置 `shouldR
 
 ## 多行文本坐标
 
-`LineTextLayout` 已把 Core Text 的 y-up baseline 转换成 y-down frame。`SyncedLyricsLineContentLayer`
-也必须固定为 `isGeometryFlipped = true`。此前根据 AppKit backing layer 的状态动态取反，使 content layer
-在真实 flipped row view 中变成 unflipped；一条歌词换成两行时，第二个视觉行因此被画到第一个视觉行上方。
+`LineTextLayout` 已把 Core Text 的 y-up baseline 转换成 y-down frame，所以 `SyncedLyricsLineContentLayer`
+的**有效**朝向必须是 y-down。Core Animation 的 `isGeometryFlipped` 只是相对父层再翻一次，一个 layer 的有效朝向是
+从根到它所有标志的异或（`contentsAreFlipped()`）。AppKit 只在 view 与父 view 的 flipped 状态不同的地方给 backing
+layer 打这个标志（面板里打在 `NSScrollView` 的 layer 上，行 view 单独挂进窗口时打在行 layer 上），并且是在
+CATransaction 提交时才打，比 `layout()` 晚一拍。所以由我们自己摆放的 sublayer 只能猜奇偶，而且第一次 layout 时
+猜不到。
 
-回归测试使用用户截图中的版权句“（未经著作权人许可，不得翻唱翻录或使用。）”，同时固定两层契约：
-layout 中 visual row 0 的 y 小于 visual row 1，承载这些 frame 的 content layer 保持 y-down。
+因此 content layer 不再由行 view 手工加到 backing layer 上，而是交给一个 flipped 的 layer-hosting 子视图
+`ContentHostView`（`view.layer = contentLayer`）承载：AppKit 会在每次提交时把宿主 layer 的朝向维持成与 view 一致的
+y-down，行 view 只在 `layout()` 里设置宿主的 frame（y-down 坐标）。`SyncedLyricsLineContentLayer.init` 仍默认
+`isGeometryFlipped = true`，供离屏探针直接挂在 y-up 的 CARenderer 根下使用；被宿主时这个值由 AppKit 接管，行 view
+永远不写它。
+
+这条曾两次修错：最早按行 layer 自己的 `isGeometryFlipped` 取反，8445f2e 改成硬编码 `true`，两版都只看了行 layer
+自己、没看祖先链的奇偶；2026-09-06 在 Darwin 25.6 上换行歌词再次整行颠倒（08-29 以来没有代码改过这条链，应是
+AppKit 打标志的策略变了）。回归测试 `WrappedRowOrderProbes` 把真实容器和单独的行 view 各挂进一个窗口，把两个视觉行
+投影到窗口根 layer 上比较高低，并核对文字块顶边落在 padding 上；`LineEmphasisStructureProbes` 里的版权句探针改为
+断言 content layer 的有效朝向（`contentsAreFlipped()`）而非它自己的标志。
 
 每个 visual row 还必须保留 Core Text 给出的精确 typographic frame，不能用整段 `contentSize.height`
 除以行数来推算平均行高。后者没有表达各行的 ascent、descent 与 leading，会让渐变在不同字体或混排
@@ -501,6 +513,26 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
   SwiftFormat lint 通过。`LineEmphasisProbes.emphasisTimelineKeepsGlyphsIntactAndInPlace` 在其中一次串行组合运行里
   以 3 行之差超出抬高上限，单独重跑两次与全量运行都通过，属既有的时序敏感，未改阈值。没有交互式 UI 验证授权，
   未启动应用。
+
+### 2026-09-06 修正：换行歌词的第二视觉行画到第一行上面
+
+- **现象**：用户截图里每条换行的英文歌词都上下颠倒（「knew I never could」在「I told you I changed, even when I」之上），
+  单行歌词看不出来。
+- **原因**：见上文「多行文本坐标」——content layer 的 `isGeometryFlipped = true` 只是相对父层再翻一次，而 AppKit 在
+  CATransaction 提交时把翻转标志打在了 `NSScrollView` 的 layer 上，行 layer 因此已经是有效 y-down，content layer 再翻
+  一次就变回 y-up。08-29 硬编码 `true` 时能工作，08-29 以来没有代码改过这条链，应是 AppKit 打标志的策略变了。
+- **四问**：`WrappedRowOrderProbes` 在修复前复现（第一行投影在第二行下方）；不是本轮改动引入，行 view 这段自 8445f2e
+  未动；所有换行歌词都受影响，必须修；8445f2e 就是为同一现象改成硬编码，再之前按行 layer 自己的标志取反，两次都
+  只看了行 layer 自己。
+- **修法**：content layer 交给 flipped 的 layer-hosting 子视图 `ContentHostView` 承载，行 view 只设宿主 frame，不再写
+  `isGeometryFlipped` / `position`；朝向由 AppKit 在每次提交时维持。
+- **回归**：`WrappedRowOrderProbes` 两条（真实容器、单独挂窗）投影比较高低并核对顶边落在 padding 上；
+  `LineEmphasisStructureProbes` 版权句探针挂进窗口后断言有效朝向；`TranslatedLineEmphasisProbes` 改为比较文字块
+  距行顶的距离而不是 layer position。
+- **验证**：`LyricsXPackage` 全量 176 项、26 个 suite `--no-parallel` 通过，原始退出码 0；workspace LyricsX Debug scheme
+  隔离 DerivedData 构建成功，退出码 0；SwiftFormat lint 通过。`LineEmphasisProbes.emphasisTimelineKeepsGlyphsIntactAndInPlace`
+  的静止帧偶尔渲染为空（flush 后只等 50 ms），本轮单跑失败两次、带帧转储和全量运行均通过，属既有抖动，未改。
+  没有交互式 UI 验证授权，未启动应用。
 
 ## 验证记录
 
