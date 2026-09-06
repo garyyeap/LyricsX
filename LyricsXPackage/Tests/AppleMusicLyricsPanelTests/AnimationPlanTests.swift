@@ -4,8 +4,11 @@ import Testing
 @testable import AppleMusicLyricsPanel
 
 struct AnimationPlanTests {
+    /// `sub_1001C28A4` withholds the `emphasis` capability from these
+    /// languages, so `sub_1001C2DD4` leaves every word `.none`: no per-glyph
+    /// schedule at all — the syllables lift on their own.
     @Test(arguments: ["ar", "ar-SA", "he_IL", "zh-Hant", "ja-JP"])
-    func excludedLanguagesKeepLiftButRemoveScaleAndGlow(languageIdentifier: String) {
+    func excludedLanguagesGetNoPerGlyphSchedule(languageIdentifier: String) {
         let plan = AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 1.5,
             wordLength: 4,
@@ -15,14 +18,11 @@ struct AnimationPlanTests {
             timingSource: .synchronized
         )
 
-        #expect(plan.factor == 0)
-        #expect(plan.scale == 1)
-        #expect(plan.glowOpacity == 0)
-        #expect(plan.riseDelays.count == 4, "a zero factor must not remove the lift schedule")
+        #expect(plan == nil)
     }
 
     @Test func synchronizedFactorUsesStrictDurationAndLengthBoundaries() {
-        func factor(duration: TimeInterval, length: Int) -> CGFloat {
+        func factor(duration: TimeInterval, length: Int) -> CGFloat? {
             AppleMusicLyrics.WordEmphasisPlan.make(
                 wordDuration: duration,
                 wordLength: length,
@@ -30,25 +30,34 @@ struct AnimationPlanTests {
                 timingGlyphCount: length,
                 languageIdentifier: "en-US",
                 timingSource: .synchronized
-            ).factor
+            )?.factor
         }
 
-        #expect(factor(duration: 1, length: 7) == 0)
-        #expect(abs(factor(duration: 1.25, length: 7) - 0.25) < 0.000_001)
+        #expect(factor(duration: 1, length: 7) == nil, "a word of exactly one second is `.none`")
+        #expect(abs((factor(duration: 1.25, length: 7) ?? 0) - 0.25) < 0.000_001)
         #expect(factor(duration: 2, length: 7) == 1)
         #expect(factor(duration: 8, length: 7) == 1)
-        #expect(factor(duration: 2, length: 8) == 0)
+        #expect(factor(duration: 2, length: 8) == nil, "eight characters is `.none`")
     }
 
-    @Test func synchronizedScheduleUsesTheRecoveredWordFormulas() {
-        let plan = AppleMusicLyrics.WordEmphasisPlan.make(
+    @Test func syllableLiftUsesMusicsSoftSpring() {
+        #expect(AppleMusicLyrics.SyllableLiftPlan.springMass == 1)
+        #expect(AppleMusicLyrics.SyllableLiftPlan.springStiffness == 14)
+        #expect(AppleMusicLyrics.SyllableLiftPlan.springDamping == 7)
+        let timing = AppleMusicLyrics.SyllableLiftPlan.springTiming
+        #expect(timing.stiffness == 14)
+        #expect(timing.settlingDuration > 1, "this spring takes about a second to settle, which is the whole point")
+    }
+
+    @Test func synchronizedScheduleUsesTheRecoveredWordFormulas() throws {
+        let plan = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 2,
             wordLength: 4,
             renderedGlyphCount: 4,
             timingGlyphCount: 4,
             languageIdentifier: nil,
             timingSource: .synchronized
-        )
+        ))
 
         #expect(plan.factor == 1)
         #expect(abs(plan.scale - 1.14) < 0.000_001)
@@ -67,15 +76,15 @@ struct AnimationPlanTests {
         #expect(AppleMusicLyrics.WordEmphasisPlan.deglowSpringDamping == 7)
     }
 
-    @Test func synchronizedScheduleClampsTheSpringPeriodAndGlyphStagger() {
-        let plan = AppleMusicLyrics.WordEmphasisPlan.make(
+    @Test func synchronizedScheduleClampsTheSpringPeriodAndGlyphStagger() throws {
+        let plan = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 10,
             wordLength: 1,
             renderedGlyphCount: 1,
             timingGlyphCount: 1,
             languageIdentifier: "en",
             timingSource: .synchronized
-        )
+        ))
 
         #expect(plan.springPeriod == 3)
         #expect(plan.glyphStagger == 0.4)
@@ -83,15 +92,15 @@ struct AnimationPlanTests {
         #expect(abs((plan.returnDelays.first ?? 0) - 20.4) < 0.000_001)
     }
 
-    @Test func inferredTimingKeepsTheEstablishedPhraseFallback() {
-        let plan = AppleMusicLyrics.WordEmphasisPlan.make(
+    @Test func inferredTimingKeepsTheEstablishedPhraseFallback() throws {
+        let plan = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 2,
             wordLength: 1,
             renderedGlyphCount: 1,
             timingGlyphCount: 4,
             languageIdentifier: "zh-Hant",
             timingSource: .inferred
-        )
+        ))
 
         #expect(plan.factor == 1)
         #expect(plan.riseDelays == [0])
@@ -99,8 +108,8 @@ struct AnimationPlanTests {
     }
 
     @Test(arguments: ["zh-Hans", "ja-JP", "en-US"])
-    func fullEmphasisPolicyGivesStructuredWordsTheInlineFallbackLook(languageIdentifier: String) {
-        let plan = AppleMusicLyrics.WordEmphasisPlan.make(
+    func fullEmphasisPolicyGivesStructuredWordsTheInlineFallbackLook(languageIdentifier: String) throws {
+        let plan = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 0.4,
             wordLength: 2,
             renderedGlyphCount: 2,
@@ -108,7 +117,7 @@ struct AnimationPlanTests {
             languageIdentifier: languageIdentifier,
             timingSource: .synchronized,
             structuredEmphasisPolicy: .fullEmphasis
-        )
+        ))
 
         #expect(plan.factor == 1)
         #expect(abs(plan.scale - 1.14) < 0.000_001)

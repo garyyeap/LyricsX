@@ -20,6 +20,17 @@ extension AppleMusicLyrics {
         static let deglowSpringStiffness: CGFloat = 14
         static let deglowSpringDamping: CGFloat = 7
 
+        /// The per-glyph swell Music schedules for a word, or `nil` for a word
+        /// Music does not animate glyph by glyph at all.
+        ///
+        /// `Lyrics.Word.emphasis` is `enum { case factor(Double), case none }`,
+        /// decided when the model is built (`sub_1001C2DD4`): `.factor` needs
+        /// the line's language to carry the `emphasis` capability
+        /// (`sub_1001C28A4` withholds it from ar/he/zh/ja), a duration over one
+        /// second, at most seven characters, and a positive `min(d, 2) - 1`.
+        /// Everything else is `.none`, and `sub_10018B2B4` returns before
+        /// touching a glyph for `.none` — those words are built from syllable
+        /// layers instead and only get the ``SyllableLiftPlan`` lift.
         static func make(
             wordDuration: TimeInterval,
             wordLength: Int,
@@ -28,7 +39,7 @@ extension AppleMusicLyrics {
             languageIdentifier: String?,
             timingSource: TimingSource,
             structuredEmphasisPolicy: StructuredEmphasisPolicy = .appleMusic26
-        ) -> WordEmphasisPlan {
+        ) -> WordEmphasisPlan? {
             let safeDuration = max(0, wordDuration)
             let safeRenderedGlyphCount = max(0, renderedGlyphCount)
             let safeTimingGlyphCount = max(1, timingGlyphCount)
@@ -39,13 +50,13 @@ extension AppleMusicLyrics {
             let leadsWithAStagger: Bool
             switch (timingSource, structuredEmphasisPolicy) {
             case (.synchronized, .appleMusic26):
-                if LyricsLanguageCapabilities.allowsAdditionalEmphasis(languageIdentifier: languageIdentifier),
-                   safeDuration > 1,
-                   wordLength <= 7 {
-                    factor = CGFloat(min(safeDuration, 2) - 1)
-                } else {
-                    factor = 0
+                guard LyricsLanguageCapabilities.allowsAdditionalEmphasis(languageIdentifier: languageIdentifier),
+                      safeDuration > 1,
+                      wordLength <= 7 else {
+                    return nil
                 }
+                factor = CGFloat(min(safeDuration, 2) - 1)
+                guard factor > 0 else { return nil }
                 leadsWithAStagger = true
             case (.synchronized, .fullEmphasis),
                  (.inferred, _):
@@ -83,7 +94,33 @@ extension AppleMusicLyrics {
         }
     }
 
+    /// Music's per-syllable lift, the only motion a `.none` word gets.
+    ///
+    /// `sub_1001689D4` runs every syllable of every word through
+    /// `sub_1001897C0` each frame; when a syllable turns sung its
+    /// `SyllableLayer` takes `translation(0, -syllableLift)` (change closure
+    /// `sub_100189C0C`) on a `CASpringAnimation(mass 1, stiffness 14,
+    /// damping 7)` timed by that spring's own `settlingDuration`, and a rewind
+    /// runs the same spring back to identity. It is the same spring the glow
+    /// decays on, and it takes about a second to settle — which is why a line
+    /// of short words reads as a soft ripple under the sweep rather than a
+    /// row of pops. `.factor` words are built from glyph layers instead
+    /// (`sub_10018DA78`), so the lift and the swell never stack.
+    enum SyllableLiftPlan {
+        static let springMass: CGFloat = 1
+        static let springStiffness: CGFloat = 14
+        static let springDamping: CGFloat = 7
+
+        static let springTiming = SpringTimingParameters(
+            mass: springMass,
+            stiffness: springStiffness,
+            damping: springDamping
+        )
+    }
+
     enum LyricsLanguageCapabilities {
+        /// `sub_1001C28A4`: these languages get `[gradient, lift]`, every
+        /// other one `[gradient, lift, emphasis]`.
         private static let languagesWithoutAdditionalEmphasis: Set<String> = ["ar", "he", "zh", "ja"]
 
         static func allowsAdditionalEmphasis(languageIdentifier: String?) -> Bool {

@@ -53,6 +53,20 @@ cd LyricsXPackage && swift test --filter LineEmphasisProbes
 # Same, dumping every rendered frame as a PNG for eyeballing
 APPLE_MUSIC_LYRICS_PROBE_FRAME_DIRECTORY=/tmp/probe-frames swift test --filter LineEmphasisProbes
 
+# Music's per-syllable lift on structured lyrics: a line of short words rises
+# syllable by syllable on the soft spring, and only a word Music would swell
+# gets the per-glyph schedule. Red on the old per-word lift.
+swift test --filter SyllableLiftProbes
+
+# A real Apple Music line (structured timing plus a translation) through the
+# whole SyncedLyricsLineView: the translation must not change the glyph
+# motion, and sung glyphs must stay lifted until the line resets.
+# APPLE_MUSIC_LYRICS_TRACE_DIRECTORY writes the per-glyph tracks as TSV (this
+# suite and the ripple probe above). The probe suites sample real time, so run
+# them one at a time or pass --no-parallel — two of them side by side contend
+# for the main thread and the 0.5 pt trace comparison starts to jitter.
+swift test --filter TranslatedLineEmphasisProbes
+
 # Feed real downloaded .lrcx files (from ~/Music/LyricsX) through the whole
 # panel: parse → layout → container rows → publisher-injected view controller.
 # Skips itself when no library exists; APPLE_MUSIC_LYRICS_FIXTURE_DIRECTORY

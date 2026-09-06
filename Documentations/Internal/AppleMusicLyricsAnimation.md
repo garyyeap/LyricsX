@@ -1,7 +1,7 @@
 # Apple Music 26.6 歌词动画
 
 > 对应提案：[对齐 Apple Music 26.6 歌词动画](../Evolutions/0007-apple-music-lyrics-animation-parity.md)、
-> [行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧](../Evolutions/draft-apple-music-line-cascade-parity.md)
+> [行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧](../Evolutions/0009-apple-music-line-cascade-parity.md)
 >
 > 面向维护者。这里记录最终数据链、动画状态所有权和降级边界；旧的探索文档保留为历史记录，
 > 不再作为 26.6 行为的实现依据。
@@ -82,23 +82,27 @@ syllable 的层级。若同一视觉行里连续至少三个 fallback 单元各�
 `0.25` 秒，`LineTextLayout` 会让这一段共享 phrase 的 `emphasisDuration` 与
 `emphasisGlyphCount`，直到遇到普通速度单元、换行或累计时长超过 `3` 秒。各单元自身的
 `timeRange` 不变，因此起跳时刻和 karaoke progression 仍服从来源数据；改变的只是 spring period，
-避免每个单元都在一两百毫秒内独立起跳和回落。少于三个的孤立快词不会被合并。
+避免每个单元都在一两百毫秒内各自起跳、收回。少于三个的孤立快词不会被合并。
 
 这条 `0.25` 秒规则是缺少结构化层级时的项目 fallback，不是从 Apple Music 26.6 恢复出的常量。
 结构化 `SynchronizedTextTiming` 即使 word 很短也始终保留原始 envelope。
 
 ### factor 与语言能力
 
-结构化路径按歌词的 `lang` id tag 取基础语言代码。`ar`、`he`、`zh`、`ja`（含地区后缀）保留 lift，
-但没有额外 scale 和 glow。其他或未知语言只有同时满足下面两项才有 factor：
+Music 建模时给每个词一个 `Lyrics.Word.emphasis`（`enum { case factor(Double), case none }`，`sub_1001C2DD4`）。
+结构化路径按歌词的 `lang` id tag 取基础语言代码：`ar`、`he`、`zh`、`ja`（含地区后缀）的能力表只有
+`[gradient, lift]`，其它或未知语言是 `[gradient, lift, emphasis]`（`sub_1001C28A4`）。四项同时满足才是 `.factor`：
 
 ```text
+language has the emphasis capability
 wordDuration > 1 second
 wordLength <= 7 characters
-factor = min(wordDuration, 2) - 1
+factor = min(wordDuration, 2) - 1 > 0
 ```
 
-factor 为 0 不代表 glyph 静止：lift 仍然执行，只是 scale 保持 1、glow 保持 0。
+其余一律 `.none`。`.none` 的词**没有任何逐字动画**（`sub_10018B2B4` 开头即返回），它的抬高来自下一节的逐音节
+弹簧。本项目里 `WordEmphasisPlan.make` 对 `.none` 返回 `nil`，`SyncedLyricsLineContentLayer` 据此决定一个词走
+swell 还是走音节抬高。
 
 这条门槛只对结构化词生效，且可以整档切换。`StructuredEmphasisPolicy` 由隐藏的 defaults 键
 `AppleMusicLyricsStructuredEmphasisPolicy` 选择，`SyncedLyricsLineContentLayer` 在每个词起跳时读取：
@@ -123,9 +127,26 @@ riseDelay    = glyphStagger × (glyphIndex + 1)      # fullEmphasis 与 .inferre
 returnDelay  = riseDelay + 2 × wordDuration / glyphCount
 ```
 
+return 只收回放大与横向挤压，**不收回抬高**：`sub_10018B2B4` 交给 `sub_1001678FC` 的目标是
+`(frame.origin.x, frame.origin.y − syllableLift)` 加恒等变换，所以唱过的字停在高 3 pt 处，直到倒带
+或切行才回到 `frame`。本项目对应 `WordNode.sungOrigin(ofGlyphAt:)`，`resetEmphasis()` 则回到
+`restingOrigin`。
+
+### 逐音节抬高
+
+`.none` 的词按音节建 `SyllableLayer`（`sub_10018DA78`；单音节词直接以它充当词 layer），每帧 `sub_1001689D4`
+对每个音节调 `sub_1001897C0`：音节从未唱变为已唱时给 `Syllable.layer` 加 `translation(0, −syllableLift)`
+（change closure `sub_100189C0C`），动画是 `CASpringAnimation(mass 1, stiffness 14, damping 7)`，时长取它的
+`settlingDuration`，约一秒才收敛；时间退回音节之前用同一弹簧回恒等。没有 headstart，不分语言，transliteration
+行除外。它不改颜色，sweep 颜色始终是 `gradientLayer` 的事。
+
+本项目对应 `SyllableLiftPlan`（同一组弹簧常量）与 `SyncedLyricsLineContentLayer.updateSyllableLifts`：结构化词按
+`LineTextLayout.Word.Syllable.glyphIndices` 分组，整组 glyph 用一个 `LayerPropertyAnimator` 移到 `sungOrigin` /
+`restingOrigin`；`.factor` 的词不参与，它的 swell 自带落点。`.inferred` 路径没有音节组，保持满强度 swell。
+
 glow 在 rasterized `WordLayer` 上，`shadowRadius = 5`、`shadowOffset = 0`；glyph layer 只负责 position
 与 affine transform，不再各自投影。word duration 到达后，glow 由独立的
-`mass 1 / stiffness 14 / damping 7` spring 回到 0，和 glyph 的几何回落不是同一批动画。
+`mass 1 / stiffness 14 / damping 7` spring 回到 0，和 glyph 的几何收回不是同一批动画。
 
 seek、换行、歌词替换或 view reuse 都会取消尚未执行的 glyph return 与 deglow work item，删除显式
 动画，并一次性恢复模型状态。新的动画永远从 presentation layer 的可见状态接续。
@@ -415,6 +436,57 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
 - 本次没有获得交互式 UI 验证授权，因此没有启动应用；位置与流畅度判断使用用户提供的 Apple Music
   对比录屏，自动化 probe 验证 layer 层级、模型终点、presentation continuity、spring 参数、
   relative baseline、换行顺序与 rasterization 生命周期。
+
+### 2026-09-05 修正：唱过的字保持抬高，而不是落回原位
+
+- **现象**：用户报告带翻译的歌词行内动画「弹跳得很怪异」。库里带翻译的歌恰好都是 Apple Music 来源（带
+  `[synchronized-timing]`），复现回路 `TranslatedLineEmphasisProbes` 证明翻译本身不改变逐字轨迹，变的是结构化时间路径：
+  中文只抬高不放大，每个字抬 3 pt 后又落回，起落就是全部动作。
+- **Music 的实际行为**（`Music.i64` 重新反编译）：`sub_10018B2B4` 在 `riseDelay + 2 × wordDuration / glyphCount` 后调用
+  `sub_1001678FC(x: frame.origin.x, y: frame.origin.y − syllableLift, delay)`，change closure `sub_100167C8C` 只做
+  `setFrame` 与恒等变换。也就是 return 只收回放大和横向挤压，**抬高保留**；唱过的前缀一直高 3 pt，直到倒带
+  （`sub_100166DBC` 以 1.5 秒临界阻尼弹簧回到 `frame`）或切行。`frame`（+0x40）是未抬高的原位，倒带时回的就是它。
+- **本项目此前的偏差**：`SyncedLyricsLineContentLayer.scheduleReturns` 把 return 目标写成 `restingOrigin`（未抬高原位），
+  自 8445f2e 起如此，不是回归。行内标签路径共用这段代码，只是放大与发光把起落盖住了。
+- **修法**：return 目标改为 `WordNode.sungOrigin(ofGlyphAt:)`（原位上移 `syllableLift`），放大与横向位移照旧收回；
+  `resetEmphasis()` 不变，仍一次性回到 `restingOrigin`，对应 Music 的倒带与切行。
+- **复现测试**：`TranslatedLineEmphasisProbes.sungGlyphsStayLiftedUntilTheLineResets` 用《等你下课》「高中三年 我為什麼」
+  走真实 `SyncedLyricsLineView`，断言每个有时间的字结束时高于原位 `syllableLift` 且抬起后不再落回；修复前红，修复后绿，
+  作为回归测试保留。
+- **连带的探针调整**：`LineEmphasisProbes` 里两条以「唱完回原位」为前提的断言随之改写。
+  `emphasisTimelineKeepsGlyphsIntactAndInPlace` 的落位断言改为每个字一致高 3 pt、横向不漂；
+  `emphasisRipplesAcrossNeighboursInsteadOfFreezingEachGlyph` 原来把「静止且离开原位」判为卡住、把「至少三个字同时在动」
+  当涟漪证据——抬高保留后 return 只剩零点几点的位移，第三个「在动」的字就是它，于是改为「下一个字起跳时前一个字仍在动」，
+  卡住则定义为静止时既不在原位也不在抬高位。`APPLE_MUSIC_LYRICS_TRACE_DIRECTORY` 现在也会让它导出 `ripple.tsv`。
+- **验证**：五项探针串行通过（`--no-parallel`；两个真实时间轴 suite 并行跑会争抢主线程，翻译对照的 0.5 pt 容差会被
+  抖动打穿，这就是为什么 `CLAUDE.md` 的命令一次只跑一个 suite），原始退出码 0；`LyricsXPackage` 全量 167 项、22 个 suite
+  通过，退出码 0；`MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 在隔离 DerivedData 构建成功，退出码 0。
+  没有交互式 UI 验证授权，未启动应用。
+
+### 2026-09-06 修正：抬高改成逐音节软弹簧，短词和只抬高语言不再逐词弹起
+
+- **现象**：用户报告 Apple Music 来源（结构化 timing、带翻译）的英文歌词行内动画「一顿一顿」，并澄清不是掉帧，是动作本身。
+  《Slowly》「Slowly slowly we fall in love」六个词时长 0.2 到 0.75 秒，全部 factor 0，此前仍按 `WordEmphasisPlan`
+  给每个词做「逐字 stagger、周期等于词长的临界阻尼抬高」，于是每个词在自己的起点快速弹起、词与词之间静止。
+- **Music 26.6 的实际机制**：见上文「factor 与语言能力」与「逐音节抬高」两节；关键地址 `sub_1001C2DD4`（建模决定
+  `.factor` / `.none`）、`sub_1001C28A4`（语言能力表）、`sub_10018DA78`（按 emphasis 分叉建 `GlyphLayer` 或
+  `SyllableLayer`）、`sub_1001689D4` → `sub_1001897C0` → `sub_100189C0C`（逐音节软弹簧抬高）。此前文档把
+  `sub_1001897C0` 标成「音节颜色弹簧」、把 ar/he/zh/ja 描述成「保留 lift 的逐词动画」，都已更正。
+- **修法**：`WordEmphasisPlan.make` 对 `.none` 返回 `nil`；新增 `SyllableLiftPlan`；`SyncedLyricsLineContentLayer`
+  为结构化词建音节组，词首次到期时决定走 swell 还是音节抬高，每帧按音节起点用软弹簧抬起或放回；`.inferred` 不动。
+  提案见 [行内抬高改成 Music 26.6 的逐音节软弹簧](../Evolutions/0011-apple-music-syllable-lift.md)。
+- **复现测试**：`SyllableLiftProbes.shortStructuredWordsLiftPerSyllableOnMusicsSoftSpring` 用《Slowly》那行的真实词时间
+  走 Core Animation 时间轴，断言起点前不动、同音节整组同动、90% 抬高耗时不少于 0.5 秒、短词不放大、落点 3 pt；
+  `aLongStructuredWordStillSwellsWithoutAnExtraSyllableLift` 断言 1.4 秒的词仍放大且抬高不叠加。修复前在 HEAD 上以
+  原始退出码 1 失败（逐字错开 0.7 pt、提前 0.05 秒起跳、达不到 90%），修复后通过。
+- **连带调整**：`AnimationPlanTests` 改为断言 ar/he/zh/ja 与不满足门槛的词返回 `nil`，并固定软弹簧常量；
+  `LineEmphasisStructureProbes` 断言中文词的位置动画就是 stiffness 14 的弹簧、`fullEmphasis` 下才是词长弹簧；
+  `TranslatedLineEmphasisProbes.sungGlyphsStayLiftedUntilTheLineResets` 的前提改为「抬高来自音节弹簧」，断言不变。
+- **验证**：受影响的六个 suite（28 项）串行通过；`LyricsXPackage` 全量 174 项、25 个 suite `--no-parallel` 通过，原始
+  退出码 0；`MxIris-LyricsX-Project.xcworkspace` 的 LyricsX Debug scheme 在隔离 DerivedData 构建成功，退出码 0；
+  SwiftFormat lint 通过。`LineEmphasisProbes.emphasisTimelineKeepsGlyphsIntactAndInPlace` 在其中一次串行组合运行里
+  以 3 行之差超出抬高上限，单独重跑两次与全量运行都通过，属既有的时序敏感，未改阈值。没有交互式 UI 验证授权，
+  未启动应用。
 
 ## 验证记录
 

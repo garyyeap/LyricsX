@@ -170,6 +170,21 @@ struct LineEmphasisProbes {
         )
     }
 
+    /// `APPLE_MUSIC_LYRICS_TRACE_DIRECTORY` (the same switch the translated-line
+    /// probes honour) writes the ripple probe's per-glyph `position.y` samples
+    /// to `ripple.tsv`, so a threshold that trips can be read against the real
+    /// motion rather than argued about.
+    private static func writeRippleTraceIfRequested(_ tracks: [[CGFloat]], frameStep: TimeInterval) {
+        guard let directory = ProcessInfo.processInfo.environment["APPLE_MUSIC_LYRICS_TRACE_DIRECTORY"] else { return }
+        var lines = ["glyph\ttime\ty"]
+        for (glyphIndex, track) in tracks.enumerated() {
+            for (sampleIndex, positionY) in track.enumerated() {
+                lines.append(String(format: "%d\t%.3f\t%.3f", glyphIndex, Double(sampleIndex) * frameStep, positionY))
+            }
+        }
+        try? lines.joined(separator: "\n").write(toFile: "\(directory)/ripple.tsv", atomically: true, encoding: .utf8)
+    }
+
     private static func glyphLayers(of contentLayer: AppleMusicLyrics.SyncedLyricsLineContentLayer) -> [CALayer] {
         let visualRowColorContainers = (contentLayer.sublayers ?? []).filter { candidateLayer in
             (candidateLayer.sublayers ?? []).contains { sublayer in
@@ -189,13 +204,16 @@ struct LineEmphasisProbes {
     ///
     /// Two properties separate the two, and both are about *overlap*:
     ///
-    /// 1. **Several glyphs are always moving at once.** With per-character time
-    ///    tags every word holds one glyph, and if the spring and the return are
-    ///    scaled to that single character rather than to the phrase around it,
-    ///    only one or two glyphs are ever in flight.
-    /// 2. **No glyph is ever parked away from rest.** Word-scaled timings put
-    ///    the return about 0.6 s after the spring has already settled, so each
-    ///    character visibly freezes at the top of its arc before dropping.
+    /// 1. **Each glyph is still in flight when the next one starts.** With
+    ///    per-character time tags every word holds one glyph, and if the spring
+    ///    is scaled to that single character rather than to the phrase around
+    ///    it, every rise has settled before its neighbour begins.
+    /// 2. **No glyph is ever parked at the top of its arc.** Word-scaled
+    ///    timings put the return about 0.6 s after the spring has already
+    ///    settled, so each character visibly freezes, swollen, before dropping.
+    ///    A sung glyph *does* come to rest `syllableLift` above where it
+    ///    started — Music never lowers it again until the line resets — so
+    ///    "parked" means still while away from both rest and that sung height.
     @Test func emphasisRipplesAcrossNeighboursInsteadOfFreezingEachGlyph() async throws {
         let layout = try #require(Self.makeFixtureLayout())
         let renderer = try OffscreenLineRenderer()
@@ -233,6 +251,7 @@ struct LineEmphasisProbes {
         let sampleCount = tracks.map(\.count).min() ?? 0
         #expect(sampleCount > 10, "the timeline produced too few samples to judge")
         let restingPositions = tracks.map { $0.first ?? 0 }
+        Self.writeRippleTraceIfRequested(tracks, frameStep: frameStep)
         // A glyph counts as moving when it travels more than this between two
         // samples, and as displaced when it sits this far from where it started.
         let movementThreshold: CGFloat = 0.05
@@ -245,24 +264,42 @@ struct LineEmphasisProbes {
         // so the two are told apart by an order of magnitude, not by a hair.
         let stillnessThreshold: CGFloat = 0.01
 
-        var mostGlyphsMovingAtOnce = 0
-        for sampleIndex in 1 ..< sampleCount {
-            let moving = tracks.filter { abs($0[sampleIndex] - $0[sampleIndex - 1]) > movementThreshold }.count
-            mostGlyphsMovingAtOnce = max(mostGlyphsMovingAtOnce, moving)
+        func isMoving(_ glyphIndex: Int, at sampleIndex: Int) -> Bool {
+            abs(tracks[glyphIndex][sampleIndex] - tracks[glyphIndex][sampleIndex - 1]) > movementThreshold
+        }
+
+        // Overlap: at the sample where a glyph first moves, its predecessor
+        // must still be moving. A phrase-scaled spring keeps each rise going
+        // well past the next character's start (about 0.9 s against a 0.5 s
+        // spacing here); a per-character spring has settled by then.
+        var handoffsWithoutOverlap: [String] = []
+        for glyphIndex in 1 ..< tracks.count {
+            guard let startSampleIndex = (1 ..< sampleCount).first(where: { isMoving(glyphIndex, at: $0) }) else {
+                handoffsWithoutOverlap.append("glyph \(glyphIndex) never moved")
+                continue
+            }
+            if !isMoving(glyphIndex - 1, at: startSampleIndex) {
+                let startTime = String(format: "%.2f", Double(startSampleIndex) * frameStep)
+                handoffsWithoutOverlap.append("glyph \(glyphIndex - 1) was already still when glyph \(glyphIndex) started at \(startTime)s")
+            }
         }
         #expect(
-            mostGlyphsMovingAtOnce >= 3,
-            "at most \(mostGlyphsMovingAtOnce) glyph(s) ever moved together — the emphasis is stepping through characters instead of rippling"
+            handoffsWithoutOverlap.isEmpty,
+            "the emphasis is stepping through characters instead of rippling: \(handoffsWithoutOverlap.joined(separator: " ⏐ "))"
         )
 
+        // Parking: still while away from both rest and the sung height.
+        let sungLift = AppleMusicLyrics.LyricsSpecs.syllableLift
         var longestFrozenRun = 0
         var frozenGlyphIndex = -1
         for (glyphIndex, track) in tracks.enumerated() {
             var run = 0
             for sampleIndex in 1 ..< sampleCount {
-                let isDisplaced = abs(track[sampleIndex] - restingPositions[glyphIndex]) > displacementThreshold
+                let displacement = restingPositions[glyphIndex] - track[sampleIndex]
+                let isAwayFromRest = abs(displacement) > displacementThreshold
+                let isAwayFromSungHeight = abs(displacement - sungLift) > displacementThreshold
                 let isStill = abs(track[sampleIndex] - track[sampleIndex - 1]) <= stillnessThreshold
-                if isDisplaced, isStill {
+                if isAwayFromRest, isAwayFromSungHeight, isStill {
                     run += 1
                     if run > longestFrozenRun {
                         longestFrozenRun = run
@@ -276,7 +313,7 @@ struct LineEmphasisProbes {
         let frozenSeconds = Double(longestFrozenRun) * frameStep
         #expect(
             frozenSeconds < 0.15,
-            "glyph \(frozenGlyphIndex) held still away from rest for \(String(format: "%.2f", frozenSeconds))s — it is parking at the top of its arc instead of flowing back"
+            "glyph \(frozenGlyphIndex) held still away from both rest and the sung height for \(String(format: "%.2f", frozenSeconds))s — it is parking at the top of its arc instead of flowing back"
         )
     }
 
@@ -398,15 +435,19 @@ struct LineEmphasisProbes {
         )
 
         // 4. Drift: the last word's return fires `2 × wordDuration` after it
-        //    starts, so give the tail room to land, then every glyph must be
-        //    back exactly where it rested.
+        //    starts, so give the tail room to land. The return pass only takes
+        //    the swell back — Music leaves every sung glyph `syllableLift`
+        //    above its rest until the line is reset — so each glyph must end
+        //    exactly that high, with no horizontal creep and no glyph that
+        //    settled anywhere else.
         try await Task.sleep(seconds: 1.5)
         let settledPositions = Self.glyphLayers(of: contentLayer).map(\.position)
         #expect(settledPositions.count == restingPositions.count)
+        let sungLift = AppleMusicLyrics.LyricsSpecs.syllableLift
         for (index, (resting, settled)) in zip(restingPositions, settledPositions).enumerated() {
             #expect(
-                abs(resting.x - settled.x) < 0.5 && abs(resting.y - settled.y) < 0.5,
-                "glyph \(index) drifted from \(resting) to \(settled)"
+                abs(resting.x - settled.x) < 0.5 && abs((resting.y - settled.y) - sungLift) < 0.5,
+                "glyph \(index) settled at \(settled), expected \(sungLift) pt above its rest \(resting)"
             )
         }
     }

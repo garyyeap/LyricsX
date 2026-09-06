@@ -103,15 +103,17 @@ struct LineEmphasisStructureProbes {
     }
 
     /// Chinese structured lyrics are where the two policies differ most: under
-    /// Apple Music's gate a `zh` word only lifts, under the full-emphasis look it
-    /// swells and glows exactly like an inline-tag word.
+    /// Apple Music's gate a `zh` word is `.none` — its syllable lifts on the soft
+    /// spring and nothing swells — while the full-emphasis look swells and
+    /// glows exactly like an inline-tag word, on the word-length spring.
     @Test(arguments: [
-        (AppleMusicLyrics.StructuredEmphasisPolicy.appleMusic26, Float(0)),
-        (AppleMusicLyrics.StructuredEmphasisPolicy.fullEmphasis, Float(0.4)),
+        (AppleMusicLyrics.StructuredEmphasisPolicy.appleMusic26, Float(0), AppleMusicLyrics.SyllableLiftPlan.springStiffness),
+        (AppleMusicLyrics.StructuredEmphasisPolicy.fullEmphasis, Float(0.4), AppleMusicLyrics.SpringTimingParameters(dampingRatio: 1, period: 0.5).stiffness),
     ])
     func structuredChineseWordGlowsOnlyUnderTheFullEmphasisPolicy(
         policy: AppleMusicLyrics.StructuredEmphasisPolicy,
-        expectedGlowOpacity: Float
+        expectedGlowOpacity: Float,
+        expectedLiftStiffness: CGFloat
     ) throws {
         let timing = LyricsLine.Attachments.SynchronizedTextTiming(
             words: [.init(characterRange: 0 ..< 2, timeRange: 0 ..< 0.5)],
@@ -128,9 +130,14 @@ struct LineEmphasisStructureProbes {
         let wordLayer = try #require(Self.wordLayers(of: contentLayer).first)
         #expect(wordLayer.shadowOpacity == expectedGlowOpacity)
         #expect((wordLayer.animation(forKey: "AppleMusicLyrics.shadowOpacity") != nil) == (expectedGlowOpacity > 0))
-        #expect(Self.glyphLayers(of: contentLayer).allSatisfy { glyphLayer in
-            glyphLayer.animation(forKey: "AppleMusicLyrics.position") != nil
-        }, "the lift is scheduled under both policies")
+        let liftSprings = Self.glyphLayers(of: contentLayer).map { glyphLayer in
+            glyphLayer.animation(forKey: "AppleMusicLyrics.position") as? CASpringAnimation
+        }
+        #expect(liftSprings.allSatisfy { $0 != nil }, "the lift is scheduled under both policies")
+        #expect(
+            liftSprings.allSatisfy { spring in abs((spring?.stiffness ?? 0) - expectedLiftStiffness) < 0.001 },
+            "the lift must ride the spring the policy implies: \(liftSprings.map { $0?.stiffness ?? 0 }) vs \(expectedLiftStiffness)"
+        )
     }
 
     @Test func seekWithinTheSelectedLineResynchronizesTheActiveWord() throws {

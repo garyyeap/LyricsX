@@ -25,7 +25,7 @@
     —— 保存 Apple Music TTML 的 word/syllable timing，并对齐主歌词的逐字、行间与 blur 动画。
   - [0008 自绘 Metal 歌词渐变背景](Evolutions/0008-apple-music-metal-gradient.md)
     —— 用异步封面取色、低分辨率 `MTKView` 和窗口生命周期暂停替换 full-window artwork backdrop。
-  - [draft 行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧](Evolutions/draft-apple-music-line-cascade-parity.md)
+  - [0009 行间 cascade 对齐 Apple Music 26.6 并修复全屏掉帧](Evolutions/0009-apple-music-line-cascade-parity.md)
     —— 行 layer 光栅化，行间 cascade 与结构化行内 emphasis 各做成两档可切换，默认 Apple Music 原值。
   - [0010 歌词面板背景改按 Music 26「正在播放」的 MediaCoreUI 管线重做](Evolutions/0010-apple-music-now-playing-backdrop.md)
     —— 逆向确认对照窗口的背景是 `MediaCoreUI.Backdrop.CompositeRenderer` 而非 `TSLBackdropMetalView`，按其管线重做背景，

@@ -77,24 +77,56 @@ extension AppleMusicLyrics {
             /// Glow has its own slower spring and lifecycle in Music.
             var pendingDeglow: DispatchWorkItem?
 
+            /// One of Music's `SyllableLayer`s: the glyphs that rise together
+            /// when their syllable turns sung. Only structured words have these.
+            struct SyllableGroup {
+                let timeRange: Range<TimeInterval>
+                /// Indices into the owning node's `glyphLayers`.
+                let glyphIndices: [Int]
+                var isLifted = false
+            }
+
+            /// What Music would have decided for `Lyrics.Word.emphasis`.
+            enum EmphasisDecision {
+                /// `.none`: no per-glyph animation, syllables lift on their own.
+                case syllableLift
+                /// `.factor`: the per-glyph swell, which brings its own lift.
+                case wordEmphasis(WordEmphasisPlan)
+            }
+
+            var syllableGroups: [SyllableGroup]
+            /// Decided the first time the word is due, so a policy change still
+            /// lands on the next word rather than the next line.
+            var emphasisDecision: EmphasisDecision?
+
             init(
                 word: LineTextLayout.Word,
                 colorLayer: NoAnimationLayer,
                 wordLayer: NoAnimationLayer,
                 glyphLayers: [GlyphRunLayer],
-                glyphOffset: CGPoint
+                glyphOffset: CGPoint,
+                syllableGroups: [SyllableGroup]
             ) {
                 self.word = word
                 self.colorLayer = colorLayer
                 self.wordLayer = wordLayer
                 self.glyphLayers = glyphLayers
                 self.glyphOffset = glyphOffset
+                self.syllableGroups = syllableGroups
             }
 
             /// Where glyph `index` sits when nothing is emphasizing it.
             func restingOrigin(ofGlyphAt index: Int) -> CGPoint {
                 let origin = word.glyphs[index].frame.origin
                 return CGPoint(x: origin.x + glyphOffset.x, y: origin.y + glyphOffset.y)
+            }
+
+            /// Where glyph `index` stays once it has been sung: the resting
+            /// origin raised by `syllableLift`. Music never lowers a sung glyph
+            /// again until the line is rewound or deselected.
+            func sungOrigin(ofGlyphAt index: Int) -> CGPoint {
+                let rest = restingOrigin(ofGlyphAt: index)
+                return CGPoint(x: rest.x, y: rest.y - LyricsSpecs.syllableLift)
             }
         }
 
@@ -296,8 +328,23 @@ extension AppleMusicLyrics {
                 colorLayer: colorLayer,
                 wordLayer: wordLayer,
                 glyphLayers: glyphLayers,
-                glyphOffset: glyphOffset
+                glyphOffset: glyphOffset,
+                syllableGroups: Self.makeSyllableGroups(for: word)
             )
+        }
+
+        /// Music builds a `.none` word from one `SyllableLayer` per syllable;
+        /// a structured word without syllables of its own is one syllable.
+        /// Inline-tag words keep the established full-emphasis look and get none.
+        private static func makeSyllableGroups(for word: LineTextLayout.Word) -> [WordNode.SyllableGroup] {
+            guard word.timingSource == .synchronized, let timeRange = word.timeRange else { return [] }
+            let groups = word.syllables
+                .filter { !$0.glyphIndices.isEmpty }
+                .map { WordNode.SyllableGroup(timeRange: $0.timeRange, glyphIndices: $0.glyphIndices) }
+            if groups.isEmpty, !word.glyphs.isEmpty {
+                return [WordNode.SyllableGroup(timeRange: timeRange, glyphIndices: Array(word.glyphs.indices))]
+            }
+            return groups
         }
 
         /// Room an emphasized word needs beyond its own text box, on each side:
@@ -396,6 +443,7 @@ extension AppleMusicLyrics {
             precedingElapsedTime = elapsedTime
             updateSweep(layout: layout, fillFraction: fillFraction)
             scheduleDueWords(elapsedTime: elapsedTime)
+            updateSyllableLifts(elapsedTime: elapsedTime)
         }
 
         private func shouldSynchronizeEmphasisState(forElapsedTime elapsedTime: TimeInterval) -> Bool {
@@ -455,28 +503,86 @@ extension AppleMusicLyrics {
             for node in wordNodes where !node.isEmphasisScheduled {
                 guard let timeRange = node.word.timeRange, cursor >= timeRange.lowerBound else { continue }
                 node.isEmphasisScheduled = true
-                emphasize(node)
+                if case .wordEmphasis(let plan) = decideEmphasis(for: node) {
+                    emphasize(node, plan: plan)
+                }
             }
+        }
+
+        /// Music's `Lyrics.Word.emphasis`, resolved once per word from the
+        /// current policy. `nil` from the plan is Music's `.none`.
+        private func decideEmphasis(for node: WordNode) -> WordNode.EmphasisDecision {
+            if let decision = node.emphasisDecision {
+                return decision
+            }
+            let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+            let plan = WordEmphasisPlan.make(
+                wordDuration: duration,
+                wordLength: node.word.characterRange.count,
+                renderedGlyphCount: node.glyphLayers.count,
+                timingGlyphCount: node.word.emphasisGlyphCount,
+                languageIdentifier: layout?.languageIdentifier,
+                timingSource: node.word.timingSource,
+                structuredEmphasisPolicy: structuredEmphasisPolicyProvider()
+            )
+            let decision: WordNode.EmphasisDecision = plan.map { .wordEmphasis($0) } ?? .syllableLift
+            node.emphasisDecision = decision
+            if plan == nil {
+                let characterCount = node.word.characterRange.count
+                #log(
+                    .debug,
+                    """
+                    Word emphasis withheld characterCount=\(characterCount, privacy: .public) \
+                    duration=\(duration, privacy: .public) syllablesLiftOnTheirOwn=true
+                    """
+                )
+            }
+            return decision
+        }
+
+        // MARK: Syllable lift
+
+        /// `sub_1001689D4`'s per-syllable pass: a syllable that has just turned
+        /// sung rises by `syllableLift`, one that the time has rewound past
+        /// settles back, both on Music's soft spring. Only `.none` words take
+        /// part; a `.factor` word's swell carries its own lift.
+        private func updateSyllableLifts(elapsedTime: TimeInterval) {
+            for node in wordNodes where !node.syllableGroups.isEmpty {
+                guard let wordStart = node.word.timeRange?.lowerBound else { continue }
+                let isDueOrLifted = elapsedTime >= wordStart || node.syllableGroups.contains(where: \.isLifted)
+                guard isDueOrLifted, case .syllableLift = decideEmphasis(for: node) else { continue }
+                for index in node.syllableGroups.indices {
+                    let shouldBeLifted = elapsedTime >= node.syllableGroups[index].timeRange.lowerBound
+                    guard shouldBeLifted != node.syllableGroups[index].isLifted else { continue }
+                    node.syllableGroups[index].isLifted = shouldBeLifted
+                    moveSyllable(node.syllableGroups[index], of: node, lifted: shouldBeLifted)
+                }
+            }
+        }
+
+        private func moveSyllable(_ group: WordNode.SyllableGroup, of node: WordNode, lifted: Bool) {
+            let glyphLayers = group.glyphIndices.map { node.glyphLayers[$0] }
+            let animator = LayerPropertyAnimator(layers: glyphLayers, timing: SyllableLiftPlan.springTiming)
+            animator.addChange {
+                for glyphIndex in group.glyphIndices {
+                    let target = lifted
+                        ? node.sungOrigin(ofGlyphAt: glyphIndex)
+                        : node.restingOrigin(ofGlyphAt: glyphIndex)
+                    Self.place(node.glyphLayers[glyphIndex], atRestingOrigin: target)
+                }
+            }
+            animator.run()
         }
 
         // MARK: Emphasis
 
         /// Schedule one word's ripple: every glyph springs up to the emphasized
         /// size, staggered against its neighbours, then travels back.
-        private func emphasize(_ node: WordNode) {
+        private func emphasize(_ node: WordNode, plan: WordEmphasisPlan) {
             let glyphCount = node.glyphLayers.count
             guard glyphCount > 0 else { return }
             let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
             let structuredEmphasisPolicy = structuredEmphasisPolicyProvider()
-            let plan = WordEmphasisPlan.make(
-                wordDuration: duration,
-                wordLength: node.word.characterRange.count,
-                renderedGlyphCount: glyphCount,
-                timingGlyphCount: node.word.emphasisGlyphCount,
-                languageIdentifier: layout?.languageIdentifier,
-                timingSource: node.word.timingSource,
-                structuredEmphasisPolicy: structuredEmphasisPolicy
-            )
             let spring = SpringTimingParameters(
                 dampingRatio: LyricsSpecs.emphasisDampingRatio,
                 period: plan.springPeriod
@@ -544,8 +650,8 @@ extension AppleMusicLyrics {
                 // Music's own y is `(originY + verticalSlack + s·originY) * 0.25 -
                 // syllableLift`, which for its layout (glyphs sit at the word's
                 // top, so originY is 0) is the same as this. Anchoring on the
-                // laid-out origin instead means a word that has finished returns
-                // exactly where it started rather than three points high.
+                // laid-out origin keeps every glyph's lift exactly `syllableLift`
+                // above its rest, which is also where the return pass leaves it.
                 y: origin.y + node.glyphOffset.y + verticalSlack * 0.25 - LyricsSpecs.syllableLift
             )
         }
@@ -564,7 +670,12 @@ extension AppleMusicLyrics {
         }
 
         /// The return pass runs `2 · wordDuration / glyphCount` after each glyph's
-        /// own start, exactly as Music schedules it.
+        /// own start, exactly as Music schedules it, and only takes back the swell:
+        /// `sub_10018B2B4` hands `sub_1001678FC` the frame origin *minus*
+        /// `syllableLift` with an identity transform, so the sung glyph settles
+        /// three points high and stays there. Dropping it all the way back to rest
+        /// is what made lift-only (zh/ja) words read as a bounce. Only a rewind or
+        /// deselection (`resetEmphasis()`) lowers the line again.
         ///
         /// It has to be a real timer rather than a second animation queued up front:
         /// two `beginTime`-delayed animations on the same key path would have the
@@ -579,10 +690,10 @@ extension AppleMusicLyrics {
             node.pendingGlyphReturns = node.glyphLayers.enumerated().map { glyphIndex, glyphLayer in
                 let work = DispatchWorkItem { [weak node, weak glyphLayer] in
                     guard let node, let glyphLayer else { return }
-                    let rest = node.restingOrigin(ofGlyphAt: glyphIndex)
+                    let sungOrigin = node.sungOrigin(ofGlyphAt: glyphIndex)
                     let animator = LayerPropertyAnimator(layers: [glyphLayer], timing: spring)
                     animator.addChange {
-                        Self.place(glyphLayer, atRestingOrigin: rest)
+                        Self.place(glyphLayer, atRestingOrigin: sungOrigin)
                         glyphLayer.setAffineTransform(.identity)
                     }
                     animator.run()
@@ -636,6 +747,9 @@ extension AppleMusicLyrics {
                 node.pendingDeglow?.cancel()
                 node.pendingDeglow = nil
                 node.isEmphasisScheduled = false
+                for index in node.syllableGroups.indices {
+                    node.syllableGroups[index].isLifted = false
+                }
                 LayerPropertyAnimator.removeAllAnimations(from: node.wordLayer)
                 node.wordLayer.shadowOpacity = LyricsSpecs.glowOpacityRange.lowerBound
                 for (glyphIndex, glyphLayer) in node.glyphLayers.enumerated() {
