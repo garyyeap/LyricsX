@@ -10,6 +10,9 @@ extension AppleMusicLyrics {
         let factor: CGFloat
         let scale: CGFloat
         let glowOpacity: Float
+        /// The duration the schedule was built for: the word's own under
+        /// Music's gate, the phrase envelope under the full-emphasis policy.
+        let wordDuration: TimeInterval
         let springPeriod: TimeInterval
         let glyphStagger: TimeInterval
         let riseDelays: [TimeInterval]
@@ -31,13 +34,18 @@ extension AppleMusicLyrics {
         /// Everything else is `.none`, and `sub_10018B2B4` returns before
         /// touching a glyph for `.none` — those words are built from syllable
         /// layers instead and only get the ``SyllableLiftPlan`` lift.
+        ///
+        /// An inline-tag (`[tt]`) segment is judged the same way: Kugou and QQ
+        /// Music tags carry real per-word / per-character timing, so a segment
+        /// stands in for one of Music's syllables. Only the policy decides —
+        /// `fullEmphasis` keeps the legacy look (factor 1, no leading stagger)
+        /// for every timed word, whichever source it came from.
         static func make(
             wordDuration: TimeInterval,
             wordLength: Int,
             renderedGlyphCount: Int,
             timingGlyphCount: Int,
             languageIdentifier: String?,
-            timingSource: TimingSource,
             structuredEmphasisPolicy: StructuredEmphasisPolicy = .appleMusic26
         ) -> WordEmphasisPlan? {
             let safeDuration = max(0, wordDuration)
@@ -45,11 +53,11 @@ extension AppleMusicLyrics {
             let safeTimingGlyphCount = max(1, timingGlyphCount)
             let factor: CGFloat
             // Music offsets every glyph by `index + 1`, which costs a whole
-            // stagger before its first glyph moves. The full-emphasis look and
-            // the inline-tag fallback drop that leading offset.
+            // stagger before its first glyph moves. The full-emphasis look
+            // drops that leading offset.
             let leadsWithAStagger: Bool
-            switch (timingSource, structuredEmphasisPolicy) {
-            case (.synchronized, .appleMusic26):
+            switch structuredEmphasisPolicy {
+            case .appleMusic26:
                 guard LyricsLanguageCapabilities.allowsAdditionalEmphasis(languageIdentifier: languageIdentifier),
                       safeDuration > 1,
                       wordLength <= 7 else {
@@ -58,8 +66,7 @@ extension AppleMusicLyrics {
                 factor = CGFloat(min(safeDuration, 2) - 1)
                 guard factor > 0 else { return nil }
                 leadsWithAStagger = true
-            case (.synchronized, .fullEmphasis),
-                 (.inferred, _):
+            case .fullEmphasis:
                 factor = 1
                 leadsWithAStagger = false
             }
@@ -85,6 +92,7 @@ extension AppleMusicLyrics {
                 factor: factor,
                 scale: scale,
                 glowOpacity: glowOpacity,
+                wordDuration: safeDuration,
                 springPeriod: LyricsSpecs.emphasisSpringPeriod(wordDuration: safeDuration),
                 glyphStagger: glyphStagger,
                 riseDelays: riseDelays,

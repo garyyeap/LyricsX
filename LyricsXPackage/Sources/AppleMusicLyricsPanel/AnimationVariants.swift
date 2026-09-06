@@ -35,12 +35,14 @@ extension AppleMusicLyrics {
     /// timing receives. Words that only carry inline start tags are unaffected:
     /// they keep the established full-strength phrase fallback either way.
     enum StructuredEmphasisPolicy: String, CaseIterable, Sendable {
-        /// Apple Music 26.6's gate: `ar`, `he`, `zh` and `ja` lyrics only lift;
-        /// other languages swell and glow only for words longer than one second
-        /// and at most seven characters, and the first glyph waits one stagger.
+        /// Apple Music 26.6's gate, applied to structured words and inline-tag
+        /// segments alike: `ar`, `he`, `zh` and `ja` lyrics only lift; other
+        /// languages swell and glow only for words longer than one second and
+        /// at most seven characters, and the first glyph waits one stagger.
         case appleMusic26
-        /// Every structured word gets the full swell and glow with no leading
-        /// delay, the look the inline-tag fallback already has.
+        /// Every timed word gets the full swell and glow with no leading delay:
+        /// the look every source had before the syllable lift, kept for
+        /// side-by-side comparison.
         case fullEmphasis
 
         static let userDefaultsKey = "AppleMusicLyricsStructuredEmphasisPolicy"

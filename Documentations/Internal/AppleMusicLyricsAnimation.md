@@ -74,8 +74,9 @@ word 包含内层 timed span 时，内层 span 原样成为 syllable。解析仍
 不会被算进相邻 word 的 duration 或 glyph count。
 
 存在有效 `SynchronizedTextTiming` 时，emphasis 使用真实 word duration、word length 和 glyph count。
-缺少它时，既有 `InlineTimeTag` 仍会把相邻字符归回 phrase；这条 fallback 保留原有的满强度 factor
-与首 glyph 零延迟，避免非 Apple Music 来源突然改变观感。
+缺少它时，默认档把每个 `[tt]` 段当成一个音节：酷狗、QQ 音乐的 `[tt]` 是真实的逐字（英文逐词）时间轴，
+一段就是 Music 音节的粒度，判定用段自己的时长与去掉首尾空白的字数。既有 `InlineTimeTag` 把相邻字符归回
+phrase 的 fallback 只剩 `fullEmphasis` 档在用（见「factor 与语言能力」）。
 
 `InlineTimeTag` 也可能把一段快速演唱拆成连续的空格分隔单元，却没有 Apple Music 用来区分 word 与
 syllable 的层级。若同一视觉行里连续至少三个 fallback 单元各自现有的 `emphasisDuration` 不超过
@@ -104,15 +105,18 @@ factor = min(wordDuration, 2) - 1 > 0
 弹簧。本项目里 `WordEmphasisPlan.make` 对 `.none` 返回 `nil`，`SyncedLyricsLineContentLayer` 据此决定一个词走
 swell 还是走音节抬高。
 
-这条门槛只对结构化词生效，且可以整档切换。`StructuredEmphasisPolicy` 由隐藏的 defaults 键
-`AppleMusicLyricsStructuredEmphasisPolicy` 选择，`SyncedLyricsLineContentLayer` 在每个词起跳时读取：
+这条门槛对结构化词和 `[tt]` 行内标签段一视同仁，且可以整档切换。`StructuredEmphasisPolicy` 由隐藏的
+defaults 键 `AppleMusicLyricsStructuredEmphasisPolicy` 选择，`SyncedLyricsLineContentLayer` 在每个词起跳时读取，
+`WordEmphasisPlan.make` 只看这一档、不看 timing 来源：
 
-- `appleMusic26`（默认）：上面的语言门槛与时长规则，首字额外等待一个 stagger。
-- `fullEmphasis`：结构化词一律 `factor = 1`，首字零延迟，观感与 `.inferred` 路径相同。
+- `appleMusic26`（默认）：上面的语言门槛与时长规则，首字额外等待一个 stagger。`[tt]` 段用自己的时长和
+  去掉首尾空白的字数判定，不用 `LineTextLayout` 拼出的 phrase 时长——否则一句英文会整句超过 1 秒而全部放大。
+- `fullEmphasis`：所有带时间的词一律 `factor = 1`，首字零延迟，`[tt]` 段仍按 phrase envelope 分组——这就是
+  2026-09-06 之前所有非 Apple Music 来源的观感，留作并排比较。
 
-`.inferred` 路径不受这个键影响，始终满强度。加这档的原因见提案：本地歌词库两千多首里只有一首带
-`[synchronized-timing]`，用户认可行内动画时看到的是 `.inferred` 观感，之后拿那首中文结构化歌词对比
-时才命中了「只 lift」规则；两档可以并排比较后再定。
+加这档的原因见提案 0009：本地歌词库两千多首里只有一首带 `[synchronized-timing]`，用户认可行内动画时看到的是
+`[tt]` 的满强度观感，之后拿中文结构化歌词对比时才命中了「只 lift」规则。2026-09-06 用户看过结构化歌词的
+逐音节抬高后，把 `[tt]` 的满强度观感描述为「一上一下」，默认档随即改成对两种来源同一机制（见下文修正记录）。
 
 ### 调度公式与 layer 层级
 
@@ -123,7 +127,7 @@ scale        = 1 + factor × 0.14
 glowOpacity  = factor × 0.4
 springPeriod = min(wordDuration, 3)
 glyphStagger = min(wordDuration / glyphCount × 0.4, 0.4)
-riseDelay    = glyphStagger × (glyphIndex + 1)      # fullEmphasis 与 .inferred 为 glyphStagger × glyphIndex
+riseDelay    = glyphStagger × (glyphIndex + 1)      # fullEmphasis 为 glyphStagger × glyphIndex
 returnDelay  = riseDelay + 2 × wordDuration / glyphCount
 ```
 
@@ -142,7 +146,8 @@ return 只收回放大与横向挤压，**不收回抬高**：`sub_10018B2B4` �
 
 本项目对应 `SyllableLiftPlan`（同一组弹簧常量）与 `SyncedLyricsLineContentLayer.updateSyllableLifts`：结构化词按
 `LineTextLayout.Word.Syllable.glyphIndices` 分组，整组 glyph 用一个 `LayerPropertyAnimator` 移到 `sungOrigin` /
-`restingOrigin`；`.factor` 的词不参与，它的 swell 自带落点。`.inferred` 路径没有音节组，保持满强度 swell。
+`restingOrigin`；`.factor` 的词不参与，它的 swell 自带落点。`[tt]` 段没有更细的音节层级，整段一组，默认档下
+同样走这条软弹簧；`fullEmphasis` 档下 `decideEmphasis` 仍给它 swell 计划，音节组不用。
 
 glow 在 rasterized `WordLayer` 上，`shadowRadius = 5`、`shadowOffset = 0`；glyph layer 只负责 position
 与 affine transform，不再各自投影。word duration 到达后，glow 由独立的
@@ -482,10 +487,10 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
 - 本次没有获得交互式 UI 验证授权，因此没有启动应用；位置与流畅度判断使用用户提供的 Apple Music
   对比录屏，自动化 probe 验证 layer 层级、模型终点、presentation continuity、spring 参数、
   relative baseline、换行顺序与 rasterization 生命周期。
-- 非结构化来源（Kugou、网易云等的 `[tt]` 行内标签）仍走 `.inferred` 的全强度 swell：因子 1、逐字 rise 后
-  return、按 phrase 分组，没有 0011 的逐音节抬高。2026-09-06 用户把这个观感描述为「一上一下」，与结构化
-  歌词的「掀布」对比明显（当时播的是 Kugou 版 STAY，不是语言差异）；`[tt]` 段是否按 Music 的音节处理，
-  待单独提案决定。
+- 非结构化来源（Kugou、QQ 音乐、部分网易云的 `[tt]` 行内标签）从 0011 起一度仍走满强度 swell，2026-09-06
+  用户把它描述为「一上一下」（当时播的是 Kugou 版 STAY，不是语言差异），同日改为默认档下与结构化词同一机制，
+  老观感留在 `fullEmphasis` 档；见下文「2026-09-06 修正：行内标签歌词也走逐音节抬高」。LIBLRC 等纯按行歌词
+  没有词级时间，仍只有整行高亮。
 
 ### 2026-09-05 修正：唱过的字保持抬高，而不是落回原位
 
@@ -557,6 +562,30 @@ Release 构建的 bundle identifier 是 `com.JH.LyricsX`。无法解析的值按
   隔离 DerivedData 构建成功，退出码 0；SwiftFormat lint 通过。`LineEmphasisProbes.emphasisTimelineKeepsGlyphsIntactAndInPlace`
   的静止帧偶尔渲染为空（flush 后只等 50 ms），本轮单跑失败两次、带帧转储和全量运行均通过，属既有抖动，未改。
   没有交互式 UI 验证授权，未启动应用。
+
+### 2026-09-06 修正：行内标签歌词也走逐音节抬高
+
+- **现象**：用户对比后说「英文歌行内动画一上一下，中文歌像掀起一块布」。查当时加载的文件：英文歌是 Kugou 版
+  STAY（`[by:Kugou]`，只有 `[tt]`），走的是 0011 有意保留的 `.inferred` 满强度路径——每个 phrase 放大 14%、发光、
+  逐字抬起再收回；对比的中文歌全是 Apple Music 结构化歌词，走逐音节软弹簧抬高。Apple Music 版 STAY 的 366 个词
+  里 357 个同样会走抬高路径，所以差别在来源不在语言。
+- **数据核对**：起初误判 Kugou 时间轴是均分的（每词 239 ms）；用户指出酷狗、QQ 音乐都是逐字歌词。重新解码正式
+  歌词行，逐词时长 155–574 ms，与 Apple Music 同曲相差不到 0.1 秒，均分的只有文件开头的署名行。所以一个 `[tt]`
+  段就是 Music 音节的可靠替身。网易云部分歌也有逐字，只有 LIBLRC 完全按行。
+- **四问**：能复现——`InlineTagSyllableLiftProbes` 用该行真实逐词时间在默认档下断言软弹簧抬高、不放大不发光、
+  抬起后不落回，修复前红。基线也有——自 0011（954459f）起如此，是 0011 明确留下的边界，不是回归。值得修——
+  本地库几乎全是 `[tt]` 来源，这是绝大多数歌的观感。以前修过吗——0011 的决策日志写明「`.inferred` 不动」是为了
+  保留用户当时认可的观感；用户看过 Music 的真实机制后这个理由不再成立。
+- **修法**：`WordEmphasisPlan.make` 去掉 `timingSource` 参数，判定只看策略档；默认档下 `decideEmphasis` 对 `[tt]` 段
+  用段自己的时长和去掉首尾空白的字数（不用 phrase envelope），`makeSyllableGroups` 给所有带时间的词建组，
+  `[tt]` 段整段一组走 `updateSyllableLifts`；`fullEmphasis` 档保留老公式与 phrase 分组。`LineTextLayout` 不改。
+- **回归**：`InlineTagSyllableLiftProbes` 四条（默认档三条修复前红：stiffness 537 而非 14、scale 1.14、glow 0.4；
+  `fullEmphasis` 档一条前后都绿）；`AnimationPlanTests` 的 `.inferred` 用例拆成按档断言，默认档按 Music 门槛
+  （英文 1.461 秒 factor 0.461、中文为 `nil`、短段为 `nil`）；`LineEmphasisProbes` 的逐字中文 `[tt]` 探针在默认档下
+  不改即通过——不裁切、抬高有界、不在弧顶停住对新机制同样成立。
+- **验证**：LyricsXPackage 全量 183 项 / 27 suite `--no-parallel` 退出码 0；workspace LyricsX Debug 隔离构建成功；
+  SwiftFormat lint 本次改动文件无差异。未启动应用做交互式 UI 验证，观感待用户放 Kugou 歌确认。
+- **提案**：`Documentations/Evolutions/0012-inline-tag-syllable-lift.md`。
 
 ## 验证记录
 

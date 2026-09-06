@@ -58,6 +58,13 @@ APPLE_MUSIC_LYRICS_PROBE_FRAME_DIRECTORY=/tmp/probe-frames swift test --filter L
 # gets the per-glyph schedule. Red on the old per-word lift.
 swift test --filter SyllableLiftProbes
 
+# Inline-tag ([tt]) lyrics — Kugou, QQ Music, some NetEase — take the same
+# per-segment lift: Kugou's STAY line with its real per-word timing rises on
+# the soft spring, never swells or glows, and stays up; a 1.46 s held word
+# swells by Music's factor; the fullEmphasis policy keeps the legacy look.
+# Red on the old full-emphasis inline path.
+swift test --filter InlineTagSyllableLiftProbes
+
 # Wrapped rows on screen: a two-row lyric mounted in a window (inside the real
 # container and on its own), each visual row projected into the window's root
 # layer. Red whenever the content layer's effective orientation comes out y-up.

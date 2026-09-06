@@ -14,8 +14,7 @@ struct AnimationPlanTests {
             wordLength: 4,
             renderedGlyphCount: 4,
             timingGlyphCount: 4,
-            languageIdentifier: languageIdentifier,
-            timingSource: .synchronized
+            languageIdentifier: languageIdentifier
         )
 
         #expect(plan == nil)
@@ -28,8 +27,7 @@ struct AnimationPlanTests {
                 wordLength: length,
                 renderedGlyphCount: length,
                 timingGlyphCount: length,
-                languageIdentifier: "en-US",
-                timingSource: .synchronized
+                languageIdentifier: "en-US"
             )?.factor
         }
 
@@ -55,8 +53,7 @@ struct AnimationPlanTests {
             wordLength: 4,
             renderedGlyphCount: 4,
             timingGlyphCount: 4,
-            languageIdentifier: nil,
-            timingSource: .synchronized
+            languageIdentifier: nil
         ))
 
         #expect(plan.factor == 1)
@@ -82,8 +79,7 @@ struct AnimationPlanTests {
             wordLength: 1,
             renderedGlyphCount: 1,
             timingGlyphCount: 1,
-            languageIdentifier: "en",
-            timingSource: .synchronized
+            languageIdentifier: "en"
         ))
 
         #expect(plan.springPeriod == 3)
@@ -92,19 +88,52 @@ struct AnimationPlanTests {
         #expect(abs((plan.returnDelays.first ?? 0) - 20.4) < 0.000_001)
     }
 
-    @Test func inferredTimingKeepsTheEstablishedPhraseFallback() throws {
+    /// The full-emphasis policy is where the legacy inline-tag look lives now:
+    /// every phrase at factor 1, no leading stagger, whatever the language.
+    @Test func inferredTimingKeepsTheEstablishedPhraseFallbackUnderTheFullEmphasisPolicy() throws {
         let plan = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
             wordDuration: 2,
             wordLength: 1,
             renderedGlyphCount: 1,
             timingGlyphCount: 4,
             languageIdentifier: "zh-Hant",
-            timingSource: .inferred
+            structuredEmphasisPolicy: .fullEmphasis
         ))
 
         #expect(plan.factor == 1)
         #expect(plan.riseDelays == [0])
         #expect(plan.returnDelays == [1])
+    }
+
+    /// By default an inline-tag segment is judged exactly like a structured
+    /// word: Kugou's held "stay" (1.461 s, four letters, English) swells by
+    /// `min(1.461, 2) - 1`, a `zh` segment never does, a short one never does.
+    @Test func inferredTimingFollowsMusicsGateByDefault() throws {
+        let heldEnglish = try #require(AppleMusicLyrics.WordEmphasisPlan.make(
+            wordDuration: 1.461,
+            wordLength: 4,
+            renderedGlyphCount: 4,
+            timingGlyphCount: 4,
+            languageIdentifier: "en"
+        ))
+        #expect(abs(heldEnglish.factor - 0.461) < 0.000_001)
+        #expect(heldEnglish.riseDelays.first == heldEnglish.glyphStagger, "the first glyph waits one stagger, as Music schedules it")
+
+        #expect(AppleMusicLyrics.WordEmphasisPlan.make(
+            wordDuration: 2,
+            wordLength: 1,
+            renderedGlyphCount: 1,
+            timingGlyphCount: 1,
+            languageIdentifier: "zh-Hant"
+        ) == nil, "zh has no emphasis capability, so its segments only lift")
+
+        #expect(AppleMusicLyrics.WordEmphasisPlan.make(
+            wordDuration: 0.574,
+            wordLength: 4,
+            renderedGlyphCount: 5,
+            timingGlyphCount: 5,
+            languageIdentifier: "en"
+        ) == nil, "a segment under a second only lifts")
     }
 
     @Test(arguments: ["zh-Hans", "ja-JP", "en-US"])
@@ -115,7 +144,6 @@ struct AnimationPlanTests {
             renderedGlyphCount: 2,
             timingGlyphCount: 2,
             languageIdentifier: languageIdentifier,
-            timingSource: .synchronized,
             structuredEmphasisPolicy: .fullEmphasis
         ))
 

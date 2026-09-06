@@ -50,11 +50,15 @@ extension AppleMusicLyrics {
             let frame: CGRect
             let visualLineIndex: Int
 
-            /// Duration and glyph count used by the emphasis scheduler.
+            /// Duration and glyph count used by the full-emphasis policy's
+            /// scheduler.
             ///
             /// Structured timing supplies the exact word duration and glyph count.
             /// The legacy inline-start path reconstructs the neighbouring phrase
             /// those timings used to describe, preserving its established motion.
+            /// Under Music's gate (the default policy) an inline-tag segment is
+            /// judged on its own `duration` instead, so this envelope only shapes
+            /// the `fullEmphasis` look.
             ///
             /// Music's formulas assume multiple glyphs can overlap. Treating every
             /// legacy character start as a one-glyph word instead makes each

@@ -166,7 +166,7 @@ extension AppleMusicLyrics {
             }
         }
 
-        /// How words with structured timing are emphasized; see
+        /// How timed words — structured or inline-tag — are emphasized; see
         /// `StructuredEmphasisPolicy`. Read as each word starts so the hidden
         /// defaults key can be flipped mid-song. Probes inject a fixed policy.
         var structuredEmphasisPolicyProvider: () -> StructuredEmphasisPolicy = {
@@ -374,10 +374,12 @@ extension AppleMusicLyrics {
         }
 
         /// Music builds a `.none` word from one `SyllableLayer` per syllable;
-        /// a structured word without syllables of its own is one syllable.
-        /// Inline-tag words keep the established full-emphasis look and get none.
+        /// a structured word without syllables of its own is one syllable, and
+        /// so is an inline-tag segment — Kugou and QQ Music tags are real
+        /// per-word / per-character timing, the same grain as Music's
+        /// syllables. An untimed word gets none.
         private static func makeSyllableGroups(for word: LineTextLayout.Word) -> [WordNode.SyllableGroup] {
-            guard word.timingSource == .synchronized, let timeRange = word.timeRange else { return [] }
+            guard let timeRange = word.timeRange else { return [] }
             let wordCharacters = Array(word.text)
             let groups = word.syllables
                 .filter { !$0.glyphIndices.isEmpty }
@@ -576,15 +578,32 @@ extension AppleMusicLyrics {
             if let decision = node.emphasisDecision {
                 return decision
             }
-            let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+            let structuredEmphasisPolicy = structuredEmphasisPolicyProvider()
+            // Under Music's gate an inline-tag segment is judged on its own
+            // duration and glyphs. The phrase envelope `LineTextLayout` builds
+            // for the legacy look would make a whole English line count as one
+            // long word and swell every segment in it.
+            let judgesTheSegmentOnItsOwn = node.word.timingSource == .inferred
+                && structuredEmphasisPolicy == .appleMusic26
+            let duration: TimeInterval
+            let timingGlyphCount: Int
+            if judgesTheSegmentOnItsOwn {
+                duration = node.word.duration
+                timingGlyphCount = node.glyphLayers.count
+            } else {
+                duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+                timingGlyphCount = node.word.emphasisGlyphCount
+            }
+            // `[tt]` segments carry their trailing space; Music's seven-character
+            // gate counts the word itself.
+            let wordLength = node.word.text.trimmingCharacters(in: .whitespacesAndNewlines).count
             let plan = WordEmphasisPlan.make(
                 wordDuration: duration,
-                wordLength: node.word.characterRange.count,
+                wordLength: wordLength,
                 renderedGlyphCount: node.glyphLayers.count,
-                timingGlyphCount: node.word.emphasisGlyphCount,
+                timingGlyphCount: timingGlyphCount,
                 languageIdentifier: layout?.languageIdentifier,
-                timingSource: node.word.timingSource,
-                structuredEmphasisPolicy: structuredEmphasisPolicyProvider()
+                structuredEmphasisPolicy: structuredEmphasisPolicy
             )
             let decision: WordNode.EmphasisDecision = plan.map { .wordEmphasis($0) } ?? .syllableLift
             node.emphasisDecision = decision
@@ -673,7 +692,7 @@ extension AppleMusicLyrics {
         private func emphasize(_ node: WordNode, plan: WordEmphasisPlan) {
             let glyphCount = node.glyphLayers.count
             guard glyphCount > 0 else { return }
-            let duration = node.word.emphasisDuration > 0 ? node.word.emphasisDuration : node.word.duration
+            let duration = plan.wordDuration
             let structuredEmphasisPolicy = structuredEmphasisPolicyProvider()
             let spring = SpringTimingParameters(
                 dampingRatio: LyricsSpecs.emphasisDampingRatio,
