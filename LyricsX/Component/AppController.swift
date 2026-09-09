@@ -433,12 +433,15 @@ extension AppController {
                 title: NSLocalizedString("Embedded Lyrics", comment: "Local lyrics menu option")
             ))
         }
-        if let directory = track.localFileURL?.deletingLastPathComponent(),
+        if let musicFileURL = track.localFileURL,
            let files = try? FileManager.default.contentsOfDirectory(
-               at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
+               at: musicFileURL.deletingLastPathComponent(),
+               includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
            ) {
+            let baseName = musicFileURL.deletingPathExtension().lastPathComponent
             let lyricsFiles = files.filter {
-                ["lrc", "lrcx"].contains($0.pathExtension.lowercased()) &&
+                $0.deletingPathExtension().lastPathComponent == baseName &&
+                    ["lrc", "lrcx"].contains($0.pathExtension.lowercased()) &&
                     (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
             }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             choices += lyricsFiles.map { LocalLyricsChoice(track: track, source: .file($0), title: $0.lastPathComponent) }
