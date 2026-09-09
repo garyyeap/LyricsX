@@ -30,6 +30,10 @@ final class AppController: NSObject {
 
     @Published var currentLyrics: Lyrics? {
         willSet {
+            if newValue !== currentLyrics {
+                timestampAdjustment = nil
+                embeddedLyricsTrack = nil
+            }
             willChangeValue(forKey: "lyricsOffset")
             currentLineIndex = nil
         }
@@ -70,17 +74,22 @@ final class AppController: NSObject {
     private var previousPlaybackState: PlaybackState?
 
     private var cancelBag = Set<AnyCancellable>()
+    private var timestampAdjustment: LyricsTimestampAdjustment?
+    private var embeddedLyricsTrack: MusicTrack?
 
     private let widgetDataStore = WidgetDataStore(groupIdentifier: lyricsXGroupIdentifier)
 
     @objc dynamic var lyricsOffset: Int {
         get {
-            return currentLyrics?.offset ?? 0
+            return timestampAdjustment?.offset ?? currentLyrics?.offset ?? 0
         }
         set {
-            currentLyrics?.offset = newValue
-            currentLyrics?.metadata.needsPersist = true
-            scheduleCurrentLineCheck()
+            guard let lyrics = currentLyrics else { return }
+            var adjustment = timestampAdjustment ?? LyricsTimestampAdjustment(lyrics: lyrics)
+            adjustment.apply(offset: newValue, to: lyrics)
+            timestampAdjustment = adjustment
+            lyrics.metadata.needsPersist = true
+            currentLyrics = lyrics
         }
     }
 
@@ -383,9 +392,7 @@ final class AppController: NSObject {
     }
 
     func currentTrackChanged() {
-        if currentLyrics?.metadata.needsPersist == true {
-            currentLyrics?.persist()
-        }
+        persistCurrentLyrics()
         currentLyrics = nil
         currentLineIndex = nil
         searchTask?.cancel()
@@ -427,6 +434,7 @@ final class AppController: NSObject {
         if defaults[.loadLyricsBesideTrack] {
             if let embeddedLyrics = track.lyrics, !embeddedLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 if let lyrics = Lyrics(embeddedLyrics) {
+                    lyrics.originalTimingSource = embeddedLyrics
                     if lyrics.metadata.title == nil || lyrics.metadata.title?.isEmpty == true {
                         lyrics.metadata.title = title
                     }
@@ -437,6 +445,7 @@ final class AppController: NSObject {
                     lyrics.filtrate()
                     lyrics.recognizeLanguage()
                     currentLyrics = lyrics
+                    embeddedLyricsTrack = track
                     adoptAsSoleLyricsCandidate(lyrics)
                     return
                 }
@@ -874,12 +883,43 @@ final class AppController: NSObject {
             return nil
         }
         lyrics.metadata.localURL = fileURL
+        lyrics.originalTimingSource = fileContents
         lyrics.metadata.title = title
         lyrics.metadata.artist = artist
         lyrics.applyQQMusicKanaFurigana()
         lyrics.filtrate()
         lyrics.recognizeLanguage()
         return lyrics
+    }
+
+    private func persistCurrentLyrics() {
+        guard let lyrics = currentLyrics, lyrics.metadata.needsPersist else { return }
+        if let adjustment = timestampAdjustment,
+           let source = lyrics.originalTimingSource {
+            let content = LyricsSourceTimestampShift.applying(offset: adjustment.offset, to: source)
+            if let embeddedLyricsTrack {
+                // Retain the source track: the player may already expose the next song.
+                embeddedLyricsTrack.setLyrics(content)
+                return
+            }
+            if let fileURL = lyrics.metadata.localURL,
+               ["lrc", "lrcx"].contains(fileURL.pathExtension.lowercased()) {
+                let securityURL = defaults.lyricsSecurityScopedDirectory(containing: fileURL) ?? fileURL
+                let hasAccess = securityURL.startAccessingSecurityScopedResource()
+                defer {
+                    if hasAccess { securityURL.stopAccessingSecurityScopedResource() }
+                }
+                do {
+                    try Data(content.utf8).write(to: fileURL, options: .atomic)
+                    lyrics.metadata.needsPersist = false
+                } catch {
+                    log("Failed to save shifted lyrics to \(fileURL.path): \(error.localizedDescription)")
+                }
+                return
+            }
+        }
+        if embeddedLyricsTrack != nil { return }
+        lyrics.persist()
     }
 
     private func makeLyricsSearchRequest(for track: MusicTrack) -> LyricsSearchRequest {
@@ -1093,6 +1133,11 @@ extension AppController {
         }
         lrc.metadata.title = track.title
         lrc.metadata.artist = track.artist
+        if !isTTML, let filePath,
+           ["lrc", "lrcx"].contains((filePath as NSString).pathExtension.lowercased()) {
+            lrc.metadata.localURL = URL(fileURLWithPath: filePath)
+            lrc.originalTimingSource = lyricsString
+        }
         lrc.applyQQMusicKanaFurigana()
         lrc.filtrate()
         lrc.recognizeLanguage()

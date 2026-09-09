@@ -37,6 +37,19 @@ func lyricsEditingAllowsCreatingABlankFile() {
 }
 
 @Test
+func timestampAdjustmentRewritesEveryTag() throws {
+    let lyrics = try #require(Lyrics("[offset:200]\n[00:10.000][00:20.000]Hello\n[00:30.000]World"))
+    var adjustment = LyricsTimestampAdjustment(lyrics: lyrics)
+    adjustment.apply(offset: 500, to: lyrics)
+    #expect(lyrics.lines.map(\.position) == [9.5, 19.5, 29.5])
+    #expect(lyrics.idTags[.offset] == nil)
+    let reloaded = try #require(Lyrics(lyrics.description))
+    #expect(reloaded.lines.map(\.position) == [9.5, 19.5, 29.5])
+    adjustment.apply(offset: -1000, to: lyrics)
+    #expect(lyrics.lines.map(\.position) == [11, 21, 31])
+}
+
+@Test
 func preparingABlankLyricsFileDoesNotOverwriteExistingContent() throws {
     let directoryURL = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
