@@ -26,6 +26,10 @@ enum LyricsCandidateSwitchOutcome {
 final class AppController: NSObject {
     static let shared = AppController()
 
+    var currentLyricsIsPlainLRC: Bool {
+        currentLyrics?.metadata.localURL?.pathExtension.lowercased() == "lrc"
+    }
+
     var lyricsManager: LyricsProvider
 
     @Published var currentLyrics: Lyrics? {
@@ -347,16 +351,7 @@ final class AppController: NSObject {
 
         let content: String
         if defaults[.writeiTunesConvertToPlainLRC] {
-            // For plain LRC export, preserve the legacy LRC formatting but still respect
-            // the Chinese conversion setting for consistency with the non-plain branch.
-            var legacy = currentLyrics.legacyDescription
-            if let converter = ChineseConverter.shared {
-                legacy = converter.convert(legacy)
-            }
-            // Note: translations are intentionally not appended for plain LRC export,
-            // even when `writeiTunesWithTranslation` is enabled, to keep the legacy
-            // LRC output single-line per timestamp.
-            content = legacy
+            content = plainLyricsDescription(currentLyrics)
         } else {
             content = currentLyrics.lines.map { line -> String in
                 var content = line.content
@@ -380,6 +375,38 @@ final class AppController: NSObject {
         let regex = Regex(#"\n{3,}"#)
         let replaced = content.replacingMatches(of: regex, with: "\n\n")
         sbTrack.setValue(replaced, forKey: "lyrics")
+    }
+
+    func writeToLyricsFile(asPlainLRC: Bool) {
+        guard let currentLyrics,
+              let musicFileURL = selectedPlayer.currentTrack?.localFileURL else {
+            return
+        }
+
+        let fileExtension = asPlainLRC ? "lrc" : "lrcx"
+        let content = asPlainLRC ? plainLyricsDescription(currentLyrics) : currentLyrics.description
+        let lyricsFileURL = musicFileURL
+            .deletingPathExtension()
+            .appendingPathExtension(fileExtension)
+        let fileManager = FileManager.default
+
+        do {
+            if fileManager.fileExists(atPath: lyricsFileURL.path) {
+                try fileManager.removeItem(at: lyricsFileURL)
+            }
+            try content.write(to: lyricsFileURL, atomically: true, encoding: .utf8)
+        } catch {
+            log(error.localizedDescription)
+        }
+    }
+
+    private func plainLyricsDescription(_ lyrics: Lyrics) -> String {
+        // Keep this in sync with the existing plain-LRC iTunes export.
+        var legacy = lyrics.legacyDescription
+        if let converter = ChineseConverter.shared {
+            legacy = converter.convert(legacy)
+        }
+        return legacy
     }
 
     func currentTrackChanged() {

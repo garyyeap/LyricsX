@@ -348,6 +348,18 @@
                                             <action selector="writeToiTunes:" target="Ady-hI-5gd" id="4Gb-qk-5mT"/>
                                         </connections>
                                     </menuItem>
+                                    <menuItem title="Write to .lrc" tag="204" identifier="MainMenu.WriteToLRC" id="write-to-lrc-menu-item">
+                                        <modifierMask key="keyEquivalentModifierMask"/>
+                                        <connections>
+                                            <action selector="writeToLRC:" target="Ady-hI-5gd" id="write-to-lrc-action"/>
+                                        </connections>
+                                    </menuItem>
+                                    <menuItem title="Write to .lrcx" tag="205" identifier="MainMenu.WriteToLRCX" id="write-to-lrcx-menu-item">
+                                        <modifierMask key="keyEquivalentModifierMask"/>
+                                        <connections>
+                                            <action selector="writeToLRCX:" target="Ady-hI-5gd" id="write-to-lrcx-action"/>
+                                        </connections>
+                                    </menuItem>
                                 </items>
                                 <attributedString key="userComments">
                                     <fragment content="#bc-ignore!">

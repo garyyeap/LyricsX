@@ -212,6 +212,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
         switch menuItem.action {
         case #selector(writeToiTunes(_:))?:
             return selectedPlayer.name == .appleMusic && AppController.shared.currentLyrics != nil
+        case #selector(writeToLRC(_:))?, #selector(writeToLRCX(_:))?:
+            return AppController.shared.currentLyrics != nil && selectedPlayer.currentTrack?.localFileURL != nil
         case #selector(searchLyrics(_:))?:
             return selectedPlayer.currentTrack != nil
         case #selector(nextLyricsCandidate(_:))?:
@@ -222,6 +224,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        updateLyricsFileMenuItems()
         menu.item(withTag: 202)?.isEnabled = AppController.shared.currentLyrics != nil
     }
 
@@ -298,6 +301,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
     @IBAction func writeToiTunes(_ sender: Any?) {
         AppController.shared.writeToiTunes(overwrite: true)
+    }
+
+    @IBAction func writeToLRC(_ sender: Any?) {
+        AppController.shared.writeToLyricsFile(asPlainLRC: true)
+    }
+
+    @IBAction func writeToLRCX(_ sender: Any?) {
+        AppController.shared.writeToLyricsFile(asPlainLRC: false)
     }
 
     @IBAction func searchLyrics(_ sender: Any?) {
@@ -502,6 +513,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        updateLyricsFileMenuItems()
         if #available(macOS 11, *) {
             let menuHasOnState = statusBarMenu.items.filter { menuItem in
                 return menuItem.state == .on
@@ -514,6 +526,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
                 lyricsOffsetConstraint?.constant += 10
             }
         }
+    }
+
+    private func updateLyricsFileMenuItems() {
+        guard let lyricsMenu = statusBarMenu.item(withTag: 202)?.submenu else { return }
+        lyricsMenu.item(withTag: 205)?.isHidden = AppController.shared.currentLyricsIsPlainLRC
     }
 }
 
