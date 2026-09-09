@@ -60,8 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/MxIris-LyricsX-Project/LyricsKit",
       "state" : {
-        "revision" : "4dc0f4f5411af81289d09ed628e1238075f591bd",
-        "version" : "1.11.0"
+        "revision" : "ffd68cc2e7b9ffccdb96d5de61c4771c62904771"
       }
     },
     {

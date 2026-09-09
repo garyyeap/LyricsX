@@ -78,7 +78,9 @@ let package = Package(
             ),
             remote: .package(
                 url: "https://github.com/MxIris-LyricsX-Project/LyricsKit",
-                exact: "1.11.0"
+                // SynchronizedTextTiming was added after v1.11.0. Keep this
+                // revision pin deterministic until that change is released.
+                revision: "ffd68cc2e7b9ffccdb96d5de61c4771c62904771"
             )
         ),
         .package(
