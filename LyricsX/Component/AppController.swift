@@ -8,14 +8,38 @@ import LyricsXFoundation
 class AppController: NSObject {
     static let shared = AppController()
 
+    enum LocalLyricsSource: Equatable {
+        case embedded
+        case file(URL)
+    }
+
+    struct LocalLyricsChoice {
+        let track: MusicTrack
+        let source: LocalLyricsSource
+        let title: String
+    }
+
+    private(set) var currentLocalLyricsSource: LocalLyricsSource?
+
     var lyricsManager: LyricsProvider
+    private let localLyricsIOQueue = DispatchQueue(label: "LocalLyricsIO", qos: .userInitiated)
+    // Lyrics can also be replaced by main-thread menu/search actions. Protect
+    // invalidation and the final local-load commit as one operation.
+    private let localLyricsSelectionLock = NSRecursiveLock()
+    private var localLyricsSelectionID = UUID()
 
     @Published var currentLyrics: Lyrics? {
         willSet {
+            localLyricsSelectionLock.lock()
+            localLyricsSelectionID = UUID()
+            if newValue !== currentLyrics {
+                currentLocalLyricsSource = nil
+            }
             willChangeValue(forKey: "lyricsOffset")
             currentLineIndex = nil
         }
         didSet {
+            defer { localLyricsSelectionLock.unlock() }
             didChangeValue(forKey: "lyricsOffset")
             scheduleCurrentLineCheck()
         }
@@ -154,12 +178,11 @@ class AppController: NSObject {
     }
 
     func currentTrackChanged() {
-        if currentLyrics?.metadata.needsPersist == true {
-            currentLyrics?.persist()
-        }
+        persistCurrentLyrics()
         currentLyrics = nil
         currentLineIndex = nil
         searchTask?.cancel()
+        searchRequest = nil
         guard let track = selectedPlayer.currentTrack else {
             return
         }
@@ -185,6 +208,7 @@ class AppController: NSObject {
                     lyrics.filtrate()
                     lyrics.recognizeLanguage()
                     currentLyrics = lyrics
+                    currentLocalLyricsSource = .embedded
                     return
                 }
             }
@@ -225,6 +249,7 @@ class AppController: NSObject {
                 lyrics.filtrate()
                 lyrics.recognizeLanguage()
                 currentLyrics = lyrics
+                currentLocalLyricsSource = .file(url)
                 if needsSearching {
                     break
                 } else {
@@ -250,6 +275,7 @@ class AppController: NSObject {
                 var collectionStart: Date?
 
                 for try await lyrics in lyricsManager.lyrics(for: request) {
+                    try Task.checkCancellation()
                     if !firstReceived {
                         lyricsReceived(lyrics: lyrics)
                         if let current = currentLyrics, current === lyrics {
@@ -269,6 +295,10 @@ class AppController: NSObject {
                     }
                 }
 
+                try Task.checkCancellation()
+                guard searchRequest == request else {
+                    return
+                }
                 if defaults[.writeToiTunesAutomatically] {
                     writeToiTunes(overwrite: true)
                 }
@@ -304,6 +334,123 @@ class AppController: NSObject {
 }
 
 extension AppController {
+    func refreshLocalLyricsChoices(completion: @escaping (MusicTrack?, [LocalLyricsChoice]) -> Void) {
+        guard let track = selectedPlayer.currentTrack else {
+            DispatchQueue.main.async {
+                completion(nil, [])
+            }
+            return
+        }
+
+        localLyricsIOQueue.async {
+            let choices = self.localLyricsChoices(for: track)
+            DispatchQueue.main.async {
+                completion(track, choices)
+            }
+        }
+    }
+
+    func applyLocalLyrics(_ choice: LocalLyricsChoice, completion: @escaping (Bool, Error?) -> Void) {
+        localLyricsSelectionLock.lock()
+        let selectionID = UUID()
+        localLyricsSelectionID = selectionID
+        localLyricsSelectionLock.unlock()
+
+        DispatchQueue.lyricsDisplay.async {
+            self.localLyricsSelectionLock.lock()
+            defer { self.localLyricsSelectionLock.unlock() }
+            guard self.localLyricsSelectionID == selectionID,
+                  let track = selectedPlayer.currentTrack, track.id == choice.track.id else {
+                DispatchQueue.main.async { completion(false, nil) }
+                return
+            }
+            // Track-change handling uses this same serial queue, so it cannot
+            // replace searchTask between this check and cancellation.
+            self.searchTask?.cancel()
+            self.searchRequest = nil
+            self.loadLocalLyrics(choice, selectionID: selectionID, completion: completion)
+        }
+    }
+
+    private func loadLocalLyrics(
+        _ choice: LocalLyricsChoice, selectionID: UUID, completion: @escaping (Bool, Error?) -> Void
+    ) {
+        localLyricsIOQueue.async {
+            do {
+                let lyricsContents: String
+                switch choice.source {
+                case .embedded:
+                    lyricsContents = choice.track.lyrics ?? ""
+                case .file(let url):
+                    lyricsContents = try String(contentsOf: url, encoding: .utf8)
+                }
+                guard let lyrics = Lyrics(lyricsContents) else {
+                    throw NSError(domain: lyricsXErrorDomain, code: 0, userInfo: [
+                        NSLocalizedDescriptionKey: NSLocalizedString("Invalid lyric file", comment: "Lyrics parsing error"),
+                    ])
+                }
+                lyrics.associateWithTrack(choice.track)
+                if case .file(let url) = choice.source {
+                    lyrics.metadata.localURL = url
+                }
+                lyrics.filtrate()
+                lyrics.recognizeLanguage()
+
+                DispatchQueue.lyricsDisplay.async {
+                    self.localLyricsSelectionLock.lock()
+                    defer { self.localLyricsSelectionLock.unlock() }
+                    guard self.localLyricsSelectionID == selectionID,
+                          let track = selectedPlayer.currentTrack, track.id == choice.track.id else {
+                        DispatchQueue.main.async {
+                            completion(false, nil)
+                        }
+                        return
+                    }
+                    self.searchTask?.cancel()
+                    self.searchRequest = nil
+                    self.currentLyrics = lyrics
+                    self.currentLocalLyricsSource = choice.source
+                    DispatchQueue.main.async {
+                        completion(true, nil)
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.localLyricsSelectionLock.lock()
+                    let isCurrent = self.localLyricsSelectionID == selectionID
+                    self.localLyricsSelectionLock.unlock()
+                    completion(false, isCurrent ? error : nil)
+                }
+            }
+        }
+    }
+
+    private func localLyricsChoices(for track: MusicTrack) -> [LocalLyricsChoice] {
+        var choices: [LocalLyricsChoice] = []
+        if let embedded = track.lyrics, !embedded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            choices.append(LocalLyricsChoice(
+                track: track, source: .embedded,
+                title: NSLocalizedString("Embedded Lyrics", comment: "Local lyrics menu option")
+            ))
+        }
+        if let directory = track.localFileURL?.deletingLastPathComponent(),
+           let files = try? FileManager.default.contentsOfDirectory(
+               at: directory, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]
+           ) {
+            let lyricsFiles = files.filter {
+                ["lrc", "lrcx"].contains($0.pathExtension.lowercased()) &&
+                    (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            choices += lyricsFiles.map { LocalLyricsChoice(track: track, source: .file($0), title: $0.lastPathComponent) }
+        }
+        return choices
+    }
+
+    private func persistCurrentLyrics() {
+        guard let lyrics = currentLyrics, lyrics.metadata.needsPersist else { return }
+        lyrics.persist()
+    }
+
     func importLyrics(_ lyricsString: String) throws {
         guard let lrc = Lyrics(lyricsString) else {
             let errorInfo = [
