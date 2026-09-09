@@ -172,22 +172,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
             menu.removeItem(item)
         }
         let controller = AppController.shared
-        let heading = NSMenuItem(
-            title: NSLocalizedString("Local Lyrics", comment: "Status menu section title"), action: nil, keyEquivalent: ""
+        let localLyricsMenuItem = NSMenuItem(
+            title: NSLocalizedString("Local Lyrics", comment: "Local lyrics submenu title"), action: nil, keyEquivalent: ""
         )
-        heading.isEnabled = false
-        localLyricsMenuItems = [.separator(), heading]
+        let localLyricsSubmenu = NSMenu(title: localLyricsMenuItem.title)
+        localLyricsMenuItem.submenu = localLyricsSubmenu
         let choices = localLyricsChoices
         for choice in choices {
             let item = NSMenuItem(title: choice.title, action: #selector(selectLocalLyrics(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = choice
-            item.indentationLevel = 1
             item.state = controller.currentLocalLyricsSource == choice.source ? .on : .off
             if case .file(let url) = choice.source {
                 item.toolTip = url.path
             }
-            localLyricsMenuItems.append(item)
+            localLyricsSubmenu.addItem(item)
         }
         if choices.isEmpty {
             let item = NSMenuItem(
@@ -198,10 +197,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
                 action: nil, keyEquivalent: ""
             )
             item.isEnabled = false
-            item.indentationLevel = 1
-            localLyricsMenuItems.append(item)
+            localLyricsSubmenu.addItem(item)
         }
-        localLyricsMenuItems.append(.separator())
+        localLyricsMenuItems = [.separator(), localLyricsMenuItem, .separator()]
         let insertionIndex = menu.index(of: searchItem) + 1
         for (offset, item) in localLyricsMenuItems.enumerated() {
             menu.insertItem(item, at: insertionIndex + offset)
