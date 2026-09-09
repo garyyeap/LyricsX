@@ -16,6 +16,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
     @IBOutlet var lyricsOffsetStepper: NSStepper!
     @IBOutlet var statusBarMenu: NSMenu!
 
+    private var localLyricsMenuItems: [NSMenuItem] = []
+    private var localLyricsChoices: [AppController.LocalLyricsChoice] = []
+    private var localLyricsChoicesTrackKey: String?
+    private var localLyricsRefreshGeneration = 0
+    private var localLyricsRefreshInFlight = false
+
     private lazy var updateController = SPUStandardUpdaterController(updaterDelegate: nil, userDriverDelegate: self)
 
     var firstLaunchForShouldHanlderReopen: Bool = true
@@ -154,9 +160,98 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.item(withTag: 202)?.isEnabled = AppController.shared.currentLyrics != nil
+        guard menu === statusBarMenu, let searchItem = menu.item(withTag: 201) else { return }
+        let currentTrackKey = localLyricsTrackKey(selectedPlayer.currentTrack)
+        if currentTrackKey != localLyricsChoicesTrackKey {
+            localLyricsChoicesTrackKey = currentTrackKey
+            localLyricsChoices = []
+            localLyricsRefreshGeneration += 1
+            localLyricsRefreshInFlight = false
+        }
+        for item in localLyricsMenuItems {
+            menu.removeItem(item)
+        }
+        let controller = AppController.shared
+        let heading = NSMenuItem(
+            title: NSLocalizedString("Local Lyrics", comment: "Status menu section title"), action: nil, keyEquivalent: ""
+        )
+        heading.isEnabled = false
+        localLyricsMenuItems = [.separator(), heading]
+        let choices = localLyricsChoices
+        for choice in choices {
+            let item = NSMenuItem(title: choice.title, action: #selector(selectLocalLyrics(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice
+            item.indentationLevel = 1
+            item.state = controller.currentLocalLyricsSource == choice.source ? .on : .off
+            if case .file(let url) = choice.source {
+                item.toolTip = url.path
+            }
+            localLyricsMenuItems.append(item)
+        }
+        if choices.isEmpty {
+            let item = NSMenuItem(
+                title: NSLocalizedString(
+                    localLyricsRefreshInFlight ? "Loading Local Lyrics…" : "No Local Lyrics Available",
+                    comment: "Local lyrics menu status"
+                ),
+                action: nil, keyEquivalent: ""
+            )
+            item.isEnabled = false
+            item.indentationLevel = 1
+            localLyricsMenuItems.append(item)
+        }
+        localLyricsMenuItems.append(.separator())
+        let insertionIndex = menu.index(of: searchItem) + 1
+        for (offset, item) in localLyricsMenuItems.enumerated() {
+            menu.insertItem(item, at: insertionIndex + offset)
+        }
     }
 
     // MARK: - Menubar Action
+
+    @objc private func selectLocalLyrics(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? AppController.LocalLyricsChoice else { return }
+        AppController.shared.applyLocalLyrics(choice) { applied, error in
+            guard !applied,
+                  let error,
+                  selectedPlayer.currentTrack?.id == choice.track.id else {
+                return
+            }
+            NSApp.presentError(error)
+        }
+    }
+
+    private func localLyricsTrackKey(_ track: MusicTrack?) -> String? {
+        track.map { String(describing: $0.id) }
+    }
+
+    private func refreshLocalLyricsChoices() {
+        guard let track = selectedPlayer.currentTrack else {
+            localLyricsChoices = []
+            localLyricsChoicesTrackKey = nil
+            localLyricsRefreshInFlight = false
+            return
+        }
+        let trackKey = localLyricsTrackKey(track)
+        if localLyricsRefreshInFlight, localLyricsChoicesTrackKey == trackKey {
+            return
+        }
+        localLyricsChoicesTrackKey = trackKey
+        localLyricsRefreshGeneration += 1
+        let generation = localLyricsRefreshGeneration
+        localLyricsRefreshInFlight = true
+        AppController.shared.refreshLocalLyricsChoices { [weak self] resultTrack, choices in
+            guard let self, self.localLyricsRefreshGeneration == generation else { return }
+            self.localLyricsRefreshInFlight = false
+            guard self.localLyricsTrackKey(resultTrack) == trackKey,
+                  self.localLyricsTrackKey(selectedPlayer.currentTrack) == trackKey else {
+                return
+            }
+            self.localLyricsChoices = choices
+            self.statusBarMenu.update()
+        }
+    }
 
     @IBAction func showLyricsHUD(_ sender: Any?) {
         if defaults[.isShowLyricsHUD] {
@@ -280,6 +375,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        if menu === statusBarMenu {
+            refreshLocalLyricsChoices()
+            statusBarMenu.update()
+        }
         if #available(macOS 11, *) {
             let menuHasOnState = statusBarMenu.items.filter { menuItem in
                 return menuItem.state == .on
