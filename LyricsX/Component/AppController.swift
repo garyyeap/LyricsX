@@ -1194,11 +1194,21 @@ extension AppController {
         localLyricsIOQueue.async {
             do {
                 let lyricsContents: String
+                var securityScopedDirectoryURL: URL?
                 switch choice.source {
                 case .embedded:
                     lyricsContents = choice.embeddedContents ?? ""
                 case .file(let url):
+                    securityScopedDirectoryURL = defaults.lyricsSecurityScopedDirectory(containing: url)
+                    if let securityScopedDirectoryURL {
+                        guard securityScopedDirectoryURL.startAccessingSecurityScopedResource() else {
+                            throw CocoaError(.fileReadNoPermission)
+                        }
+                    }
                     lyricsContents = try String(contentsOf: url, encoding: .utf8)
+                }
+                defer {
+                    securityScopedDirectoryURL?.stopAccessingSecurityScopedResource()
                 }
                 guard let lyrics = Lyrics(lyricsContents) else {
                     throw NSError(domain: lyricsXErrorDomain, code: 0, userInfo: [
@@ -1268,7 +1278,35 @@ extension AppController {
             }
             choices += lyricsFiles.map { LocalLyricsChoice(track: track, source: .file($0), title: $0.lastPathComponent) }
         }
+        let libraryChoices = libraryLyricsChoices(for: track)
+        choices += libraryChoices.filter { libraryChoice in
+            !choices.contains { $0.source == libraryChoice.source }
+        }
         return choices
+    }
+
+    private func libraryLyricsChoices(for track: MusicTrack) -> [LocalLyricsChoice] {
+        let title = track.title ?? ""
+        let artist = track.artist ?? ""
+        let (directoryURL, isSecurityScoped) = defaults.lyricsSavingPath()
+        if isSecurityScoped {
+            guard directoryURL.startAccessingSecurityScopedResource() else {
+                return []
+            }
+            defer {
+                directoryURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        return librarySearchFiles(title: title, artist: artist).compactMap { candidateFile in
+            guard FileManager.default.fileExists(atPath: candidateFile.fileURL.path) else {
+                return nil
+            }
+            return LocalLyricsChoice(
+                track: track,
+                source: .file(candidateFile.fileURL),
+                title: candidateFile.fileURL.lastPathComponent
+            )
+        }
     }
 
     private func persistCurrentLyrics() {
