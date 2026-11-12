@@ -90,6 +90,29 @@ app 调 `WidgetCenter.shared.reloadAllTimelines()` 之后，系统里负责小�
 
 不等更久，是因为网络搜歌词可能要好几秒，等太久小组件就一直停在上一首。
 
+### 5 秒节流绕不开，私有接口也一样
+
+2026-11-01 在 macOS 27.2（26B123）上逆向了 `chronod`（逻辑在私有框架 ChronoCore 里），确认这道节流 app 绕不开，
+只能像上一节那样少发、攒着发：
+
+- 节流由 `ExternalRequestReloadFilter` 执行，只管 app 发起的刷新（`ReloadReason.externalRequest`）。窗口是代码里的
+  常数 5.0 秒，不读实例属性，也不读任何偏好设置，没有开关可调。
+- 只在宿主 app 被判为「可见」时节流。依据是 RunningBoard 给进程的可见性标记，`chronod` 的 `processmonitor` 日志记作
+  `began running visibly` / `ceased running visibly`；实测 LyricsX 一直被判为可见。节流放行的刷新不扣刷新预算；
+  app 不可见时这道节流不拦，但每次刷新都要扣预算，对歌词这样频繁的刷新更糟。
+- app 能用的入口最后都是同一种请求：公开的 `reloadAllTimelines()`、`reloadTimelines(ofKind:)`，WidgetKit 内部带
+  `inBundle:` 的版本，以及私有框架 ChronoServices 的 `CHSTimelineController`。最后这个还要 Apple 专用的 entitlement
+  `com.apple.chronoservices`，第三方签不进去；它多出的 `allowCostOverride` 只管预算，不管节流。
+- 豁免都用不上：写死的 Apple 白名单（来源进程 `com.apple.homed`、`com.apple.healthd`；「小组件可见就免费刷新」只给
+  `com.apple.HeartRate.HeartRateWidgetExtension`），以及蓝牙、助听器设备的策略。调试器附着在宿主 app 上、Now Playing
+  或导航会话、扩展持有 keep-alive assertion 这几条，只在 app 不可见时才检查。
+- 不经过这道节流的刷新只有三种来源：用户点小组件上的按钮（`interaction`）、经 APNs 下发的小组件推送（`push`，要有
+  服务器），以及系统自己发起的刷新。app 都无法自己触发。
+
+逆向用的数据库是 `ChronoCore+ChronoServices+ChronoKit+WidgetKit.i64`（从 27.2 的 dyld cache 用 idax 建库）：判断在
+`sub_23903FDEC`，5.0 秒的比较在 `0x239041F00`，可见与各种豁免标志由 `sub_238E5EB2C` 算出。系统大版本更新后要复查，
+从日志串 "Throttling additional refresh request while foreground" 在 ChronoCore 里的引用找起。
+
 ### 节流按小组件种类算，请求按配置拆分
 
 上面说的 5 秒节流，对象是「扩展 + 小组件 kind」（日志里写作 `dev.JH.LyricsX.LyricsWidget-com.JH.LyricsX.LyricsWidget`），
@@ -256,6 +279,22 @@ timeline，读到的仍是那份「正在播放」的快照，于是接着往后
 退出 LyricsX 之后音乐可能还在放，小组件说「没在播放」不一定对；但它已经无从知道播放状态，总比继续滚一份过时的
 歌词好。
 
+### 桌面失焦时封面要声明 `fullColor`
+
+macOS 26 起，桌面不在前台时，小组件改用 accented 渲染模式：背景换成玻璃，文字染成白色，**不透明的图片整块涂成白色，
+渐变也一律染白**（Apple 文章「Optimizing your widget for accented rendering mode and Liquid Glass」）。原来四个尺寸的
+封面都没声明怎么画，失焦时全成了灰白方块。小号还多一处：标题底下那层黑色渐变被染白，白字落在白底上，标题看不见了。
+
+- 四个封面都加 `.widgetAccentedRenderingMode(.fullColor)`。上面那篇文章建议封面这类媒体图片用 `fullColor`。
+  `fullColor` 的符号文档写着「Only applies to iOS」，那是 macOS 还没有 accented 模式时写的；2026-11-12 在
+  macOS 27.2 的桌面上实测，失焦时封面保持原色，macOS 上同样生效。
+- 小号的黑色渐变改成 `CoverScrimView`：在 CoreGraphics 里画成一张 1 像素宽的渐变图，同样声明 `fullColor`，失焦时
+  仍是黑色。渐变的样子和原来的 `LinearGradient` 一样：上半透明，下半渐变到 60% 黑。
+
+**以后加进小组件的图片都要想一下失焦时怎么画。** 封面这类照片用 `fullColor`；图标、装饰图用 `accented`、
+`desaturated` 或 `accentedDesaturated`，让它和系统的单色外观一致。要在失焦时保持颜色的渐变、半透明遮罩，只能画成
+图片再声明 `fullColor`，SwiftUI 的渐变一定会被染白。
+
 ## 模块结构
 
 | 文件 | 内容 |
@@ -269,6 +308,7 @@ timeline，读到的仍是那份「正在播放」的快照，于是接着往后
 | `LyricsX/Intents/WidgetPlaybackIntents.swift` | 三个播放按钮的 intent，同时编进 app 和小组件；在 app 里调 `AppController` 的 `togglePlaybackFromWidget()` 等方法 |
 | `LyricsXPackage/Sources/LyricsXWidgetShared/WidgetExtensionProcessPolicy.swift` | 纯规则：一个正在运行的小组件扩展进程是不是更新留下的旧进程 |
 | `LyricsX/Component/StaleWidgetExtensionTerminator.swift` | app 启动时枚举进程、读出每个小组件进程运行的文件，按上面的规则结束旧进程 |
+| `LyricsXWidget/Views/CoverScrimView.swift` | 小号封面底部的黑色渐变，画成声明 `fullColor` 的图片，桌面失焦时不被染白 |
 
 ## 验证
 
@@ -345,6 +385,8 @@ descriptors are up to date"，一直用旧描述；重启 `chronod` 也只是从
   切换「Prefer bilingual lyrics」，桌面上所有小组件应当在约 1 秒内一起显示或收起译文。上面那条日志里，每次刷新的 `record reload` 只应出现一个配置编号，`Throttling additional refresh request`
   不应紧跟在每次刷新后面出现。
 - 大号：放一首有长句的歌，折行的句子应当居中，当前行不再变成一行加省略号。
+- 失焦：放一首有封面的歌，点一下别的 app 的窗口让桌面失焦，四个尺寸的封面都应保持原色，小号的标题仍看得清。
+  再切到桌面，样子应和失焦前一样。
 
 ## 已知降级
 
@@ -359,7 +401,8 @@ descriptors are up to date"，一直用旧描述；重启 `chronod` 也只是从
   结尾 1.5 秒内的暂停、播放，以及跳转进度，小组件约 1 秒后才跟上。小组件上的播放按钮不受影响。
 - 「单纯的暂停」靠进度判断：要是哪个播放器换歌时先报一次暂停，报的却是上一首、离结尾还远的进度，这次暂停会被当成
   单纯的暂停立刻刷新，用掉 5 秒的窗口，换歌后的正确内容要等窗口过去。目前只见过报新歌开头进度的情况。
-- 5 秒的节流是从 `chronod` 日志里量出来的，Apple 没有写进文档，系统版本变了可能跟着变。
+- 5 秒的节流写死在 `chronod` 里，app 用公开接口、私有接口都绕不开（macOS 27.2 逆向确认，见「5 秒节流绕不开，私有接口
+  也一样」）。Apple 没有写进文档，系统版本变了可能跟着变。
 - 按钮写好状态再返回这一段没有自动化测试：intent 由系统在 app 进程里调用，只能看日志、在桌面上点按钮来确认。
 - 每行换上的时刻前后有约半秒的抖动，来自系统合并计时器，app 这边消除不了；提前量只能让它的中位数对上歌词。
 - 小组件不能各自设置：所有小组件显示不显示译文都跟着 app 的「Prefer bilingual lyrics」，显示哪种跟着 app 的显示语言，
@@ -374,7 +417,6 @@ descriptors are up to date"，一直用旧描述；重启 `chronod` 也只是从
   扩展进程」。
 - app 不是正常退出（崩溃、强制退出）时 `applicationWillTerminate` 不会运行，快照留着，小组件照旧滚下去，直到 app
   再启动写新快照。
-
 ## 后续工作
 
 - 发版时，发布说明里写上「更新后把桌面上的小组件全部删掉，再重新添加一次」。

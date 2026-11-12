@@ -14,10 +14,14 @@ import FoundationToolbox
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     static var shared: AppDelegate { NSApplication.shared.delegate as! AppDelegate }
 
-    @IBOutlet var lyricsOffsetView: NSView!
+    /// The status menu's lyrics offset row, which lines its label up with the
+    /// menu's titles by itself.
+    @IBOutlet var lyricsOffsetView: TitleAlignedMenuItemView!
     @IBOutlet var lyricsOffsetTextField: NSTextField!
     @IBOutlet var lyricsOffsetStepper: NSStepper!
     @IBOutlet var statusBarMenu: NSMenu!
+
+    private var localLyricsMenuController: LocalLyricsMenuController?
 
     private lazy var updateController = SPUStandardUpdaterController(updaterDelegate: self, userDriverDelegate: self)
 
@@ -95,6 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
         MenuBarLyricsController.shared.statusBarMenu = statusBarMenu
         statusBarMenu.delegate = self
+        localLyricsMenuController = LocalLyricsMenuController(statusBarMenu: statusBarMenu)
 
         lyricsOffsetStepper.bind(
             .value,
@@ -232,6 +237,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.item(withTag: 202)?.isEnabled = AppController.shared.currentLyrics != nil
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu === statusBarMenu {
+            localLyricsMenuController?.refresh()
+        }
     }
 
     // MARK: - Menubar Action
@@ -540,21 +551,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
             .desktopLyricsXPositionFactor: 0.5,
             .desktopLyricsYPositionFactor: 0.9,
         ])
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        if #available(macOS 11, *) {
-            let menuHasOnState = statusBarMenu.items.filter { menuItem in
-                return menuItem.state == .on
-            }.count > 0
-
-            let lyricsOffsetConstraint = lyricsOffsetView.constraints.first(where: { $0.identifier == "lyricsOffsetConstraint" })
-
-            lyricsOffsetConstraint?.constant = 14
-            if menuHasOnState {
-                lyricsOffsetConstraint?.constant += 10
-            }
-        }
     }
 }
 

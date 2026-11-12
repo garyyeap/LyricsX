@@ -71,6 +71,11 @@
   - [0024 歌词面板的悬停与按下反馈、非当前行亮度和翻译样式对齐 Music 26.6](Evolutions/0024-apple-music-line-interaction-parity.md)
     —— 行的图层结构改成 Music 的「背景 + 容器（主歌词 + 翻译）」；补上悬停（去模糊、提亮）和按下（白底、
     缩到 0.95）；非当前行从整行 0.55 改为文字白 40%，切行时颜色走切行弹簧；翻译改粗体、白 50% / 40%、间距 7 pt。
+  - [0025 菜单栏歌词的暂停隐藏改用独立开关](Evolutions/0025-menu-bar-hide-lyrics-when-paused.md) —— 菜单栏不再跟着
+    桌面歌词默认开着的「隐藏歌词：暂停播放时」，改用实验室页默认关的「暂停时隐藏菜单栏歌词」。
+  - [0026 行内扫光改按 Music 26.6 的逐音节线性推进](Evolutions/0026-apple-music-syllable-sweep.md) —— 每个视觉行
+    一层渐变，进入新音节时按字形坐标发线性动画、前沿超出音节末尾 0.12 / 0.25 / 0.5 / 1 个羽化宽；扫光与逐音节
+    抬高都提前 0.1 秒；旧的按字符占比扫光留在隐藏开关 `AppleMusicLyricsSweepVariant` 后面。
 
 ## 使用说明
 
@@ -95,7 +100,8 @@
   自己的 view，切 tab 为什么没有动画（试过的三种写法各自怎么失败的），grid 里的输入框为什么必须
   给定宽度，Lab 页为什么改成可滚动、高度上限怎么定，以及怎么离屏检查一页的布局。
 - [Apple Music 26.6 歌词动画](Internal/AppleMusicLyricsAnimation.md) —— TTML 的 word/syllable timing
-  如何经过 LRCX 保存，行内 factor 与可切换的结构化 emphasis 策略、Apple Music 真实的逐行 cascade 与
+  如何经过 LRCX 保存，行内 factor 与可切换的结构化 emphasis 策略、按音节字形坐标线性推进的扫光与可切换的旧扫光、
+  扫光与抬高共用的 0.1 秒提前量、Apple Music 真实的逐行 cascade 与
   可切换的两档参数、行 layer 光栅化、`.topRelative(40)`、多行坐标、contextual blur 与 viewport edge fade
   如何落地，行的图层结构、悬停与按下反馈、非当前行亮度和翻译样式，AppKit view geometry 和
   Core Animation presentation 各自拥有什么状态，以及左栏进度条为什么只在松手时 seek、点击为什么只交给滑块本身。
@@ -111,9 +117,12 @@
 - [菜单栏歌词的绘制](Internal/MenuBarLyricsRendering.md) —— 截图副本为什么让 `NSTextField` 间歇陷入每秒 300 次的
   重画循环、调它的属性为什么没用、为什么用 cell 画字并按外观缓存位图、滚动开销为什么由帧率和条目里的按钮决定，
   探针为什么必须打包成 App 并经 LaunchServices 启动，以及什么时候显示占位文字、行号暂时为空时为什么保持不变。
+- [状态栏菜单自定义行的对齐](Internal/StatusMenuTitleAlignment.md) —— 「歌词偏移」那一行的标签为什么改成在打开的菜单里
+  量出标题位置再对齐（macOS 27 把有勾选列时的标题右移了 6 pt），参照项怎么挑，约束常数为什么要比标题的 frame 多 2 pt，
+  逆向出的 AppKit 标题位置公式，以及量不到时退回的按版本常数表。
 - [桌面小组件](Internal/DesktopWidget.md) —— 播放按钮为什么走 `AudioPlaybackIntent` 而不是 `openAppWhenRun`
   （后者每按一次就弹出设置窗口），歌词区为什么按剩下的高度挑行，以及放不下的行为什么要按顺序排在区外；刷新为什么
-  攒着发（系统每 5 秒只执行一次 app 的刷新请求），小组件为什么没有自己的设置项（编辑过的小组件自成一套配置，
+  攒着发（系统每 5 秒只执行一次 app 的刷新请求，这个限制写死在 `chronod` 里，私有接口也绕不开），小组件为什么没有自己的设置项（编辑过的小组件自成一套配置，
   其余的每次更新都晚 5 秒），更新之后为什么要结束旧版本留下的扩展进程（否则小组件一直跑旧代码，配置方式一变就全黑），
   以及 app 退出时为什么清空快照。
 
