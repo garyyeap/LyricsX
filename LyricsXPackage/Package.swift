@@ -78,7 +78,9 @@ let package = Package(
             ),
             remote: .package(
                 url: "https://github.com/MxIris-LyricsX-Project/LyricsKit",
-                exact: "1.12.0"
+                // No release carries AppleMusicAuthorizationStatus yet; this is
+                // LyricsKit develop at a3b9b28. Back to `exact:` once it is tagged.
+                revision: "a3b9b28a899f90eae6efa8cef4578f6e334d0401"
             )
         ),
         .package(
