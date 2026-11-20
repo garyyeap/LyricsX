@@ -276,14 +276,22 @@ final class AppController: NSObject {
         lyricsManagerUpdateGeneration += 1
         let generation = lyricsManagerUpdateGeneration
 
+        // A source the user switched off on the Source pane is never created,
+        // so no search — automatic, the search panel's or the next-candidate
+        // refill — sends it a request.
+        let sourceSwitches = LyricsSourceSwitches(disabledSourceIdentifiers: defaults[.disabledLyricsSources])
         let musixmatchToken = defaults[.musixmatchToken].flatMap { $0.isEmpty ? nil : $0 }
-        let tokenFreeProviders: [LyricsProvider] = [
-            LyricsProviders.Service.netease.create(),
-            LyricsProviders.Service.qq.create(),
-            LyricsProviders.Service.kugou.create(),
-            LyricsProviders.Service.lrclib.create(),
-            LyricsProviders.Service.musixmatch.create(.init(usertoken: musixmatchToken)),
+        var tokenFreeProviders: [LyricsProvider] = [
+            LyricsProviders.Service.netease,
+            LyricsProviders.Service.qq,
+            LyricsProviders.Service.kugou,
+            LyricsProviders.Service.lrclib,
         ]
+        .filter { sourceSwitches.isEnabled($0.id) }
+        .map { $0.create() }
+        if sourceSwitches.isEnabled(.musixmatch) {
+            tokenFreeProviders.append(LyricsProviders.Service.musixmatch.create(.init(usertoken: musixmatchToken)))
+        }
         // Route B: for Apple Music tracks, a search plugin recovers the
         // native-script name via the Apple Music catalog so the providers
         // can match it. The plugin runs upstream of the providers — it
@@ -321,7 +329,9 @@ final class AppController: NSObject {
         guard generation == lyricsManagerUpdateGeneration else { return }
 
         appleMusicTokenCheck = .finished(status)
-        if appleMusicTokenCheck.includesAppleMusicLyrics {
+        // The check above runs even with Apple Music switched off: its verdict
+        // is what the Lab pane shows under the token field.
+        if appleMusicTokenCheck.includesAppleMusicLyrics, sourceSwitches.isEnabled(.appleMusic) {
             lyricsManager = LyricsProviders.Group(
                 providers: tokenFreeProviders + [LyricsProviders.Service.appleMusic.create(options)],
                 plugins: plugins
@@ -478,7 +488,7 @@ final class AppController: NSObject {
         if defaults[.writeiTunesConvertToPlainLRC] {
             // For plain LRC export, preserve the legacy LRC formatting but still respect
             // the Chinese conversion setting for consistency with the non-plain branch.
-            var legacy = lyrics.legacyDescription
+            var legacy = lyrics.withoutUserPickMark.legacyDescription
             if let converter = ChineseConverter.shared {
                 legacy = converter.convert(legacy)
             }
@@ -1578,6 +1588,10 @@ final class AppController: NSObject {
               let lyrics = Lyrics(embeddedLyrics) else {
             return nil
         }
+        // Earlier releases wrote the user-pick mark into Music along with the
+        // lyrics. Embedded lyrics are never an import, which is what the mark
+        // tells the Local Lyrics menu on lyrics without a file.
+        lyrics.idTags[.userPick] = nil
         if lyrics.metadata.title == nil || lyrics.metadata.title?.isEmpty == true {
             lyrics.metadata.title = title
         }

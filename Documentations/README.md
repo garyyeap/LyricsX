@@ -82,12 +82,15 @@
     先按块平均再算 dHash，作废旧的「找不到」记录，并把网易云曲库加为高清封面的第三个来源。
   - [0029 按播放器与输出设备设置歌词偏移](Evolutions/0029-playback-route-lyrics-offset.md) —— 在每首歌的偏移和全局偏移
     之上，再按「正在播放的 App × 系统默认输出设备」加一层偏移；所有 AirPlay 输出算作一台设备。
+  - [0030 实验室页显示 Apple Music token 是否有效](Evolutions/0030-apple-music-token-status.md)
+    —— token 输入框下显示检查中 / 有效（附地区）/ 被拒 / 暂时无法检查；LyricsKit 新增三态的
+    `authorizationStatus(for:)` 并发布 1.13.0。
+  - [0031 歌词源可以单独关掉](Evolutions/0031-lyrics-source-switches.md)
+    —— 歌词源表的「来源」一列改成复选框，默认全开；关掉的源不再参与自动搜索、搜索面板和「下一条候选」，
+    设置存为 `DisabledLyricsSources`。
   - [Draft 拆分 LyricsXFoundation，包里的模块统一以 Lyrics 开头](Evolutions/draft-split-lyricsx-foundation.md)
     —— 拆出 `LyricsPolicies`、`LyricsTranslation`、`LyricsUI`，总入口改名 `LyricsFoundation`、只做转发；
     面板改名 `LyricsAppleMusicUI`、只依赖策略层，`LyricsXWidgetShared` 改名 `LyricsWidgetShared`。
-  - [Draft 实验室页显示 Apple Music token 是否有效](Evolutions/draft-apple-music-token-status.md)
-    —— token 输入框下显示检查中 / 有效（附地区）/ 被拒 / 暂时无法检查；LyricsKit 新增三态的
-    `authorizationStatus(for:)` 并发布 1.13.0。
 
 ## 使用说明
 
@@ -104,7 +107,8 @@
   判断为什么必须发生在读文件之后，回退为什么也要写在 catch 分支里，以及读文件名为什么改成
   两种拼法都试。
 - [歌词候选的排序](Internal/LyricsSourceOrdering.md) —— 为什么用分数分桶而不是比分差
-  （传递性），偏好迁移为什么必须跑在 `register(defaults:)` 之前。
+  （传递性），偏好迁移为什么必须跑在 `register(defaults:)` 之前；关掉的歌词源为什么存 rawValue、
+  为什么管不到已保存的歌词。
 - [把歌词写进「音乐」](Internal/MusicLyricsWriting.md) —— 什么时候写、写什么，否掉歌词时为什么只撤回
   LyricsX 自己写的那份，以及暂缓到 1.9.0 正式版之后的已知问题：自动写入会覆盖用户原有的歌词。
 - [设置窗口的尺寸](Internal/PreferenceWindowSizing.md) —— 切 tab 时窗口为什么会沿用上一页的

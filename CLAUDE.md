@@ -50,9 +50,12 @@ playback-position preservation, candidate-pool ordering, the manual-selection
 override table, which track picked results belong to, the search panel's
 selection, which item the status menu's Local Lyrics submenu checks — the
 track's embedded lyrics or a file, worked out from the lyrics on screen alone
-(`LocalLyricsSource`) — how a lyrics search ended, and the source-ordering modes (including
+(`LocalLyricsSource`), and that lyrics written into Music leave the user-pick
+mark out so they read back as the embedded lyrics — how a lyrics search ended, and the source-ordering modes (including
 the property tests that keep the ordering transitive) and dragging a source to
-another place in the list, what the menu bar's lyric line shows when there is
+another place in the list, which lyrics sources the user switched off
+(`LyricsSourceSwitches`: every source on unless listed, a newer build's
+unknown identifiers kept), what the menu bar's lyric line shows when there is
 no line to show, how much of a line its inline time tags say is sung (the menu
 bar's karaoke progress), which standard item the status menu's custom row lines its
 label up with and the per-release insets it falls back to, where a step of
@@ -339,7 +342,7 @@ to it is under "How a release runs" below. `Release.zsh` sets
 packages from their **published tags**, not from local checkouts.
 
 All three are pinned to an **exact version**: `LyricsXPackage/Package.swift`
-carries `exact: "1.12.0"` for LyricsKit and `exact: "1.12.0"` for MusicPlayer,
+carries `exact: "1.13.0"` for LyricsKit and `exact: "1.12.0"` for MusicPlayer,
 and MusicPlayer's own `Package.swift` carries `exact: "0.1.7"` for
 mediaremote-adapter. So nothing moves underneath a release — a dependency
 changes only when someone edits one of those strings, which puts every

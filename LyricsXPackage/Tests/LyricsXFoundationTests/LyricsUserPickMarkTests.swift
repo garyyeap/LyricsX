@@ -108,3 +108,27 @@ func theMarkLineParsesBackAsTheMark() throws {
     #expect(lyrics.isUserPicked)
     #expect(lyrics.idTags[.userPick] == LyricsUserPickOrigin.edit.rawValue)
 }
+
+/// Lyrics written into a track's own lyrics leave the mark out. Read back as
+/// the track's embedded lyrics, a mark makes them look imported, and the Local
+/// Lyrics menu then checks nothing. Red on the old write, which put the mark
+/// into Music along with every other tag.
+@Test
+func lyricsWrittenIntoATrackLeaveTheMarkOut() throws {
+    let lyrics = try #require(Lyrics(plainLyricsFile))
+    lyrics.markAsUserPicked(origin: .searchPanel)
+
+    let readBack = try #require(Lyrics(lyrics.withoutUserPickMark.legacyDescription))
+
+    #expect(!readBack.isUserPicked)
+    #expect(
+        LocalLyricsSource.onScreen(localURL: nil, service: nil, isUserPicked: readBack.isUserPicked, among: [.embedded])
+            == .embedded
+    )
+    #expect(readBack.lines.map(\.content) == ["First line", "Second line"])
+    #expect(readBack.lines.map(\.position) == [1.0, 5.5])
+    #expect(readBack.idTags[.title] == "Song Title")
+    #expect(readBack.idTags[.lrcBy] == "Kugou")
+    // The lyrics on screen keep theirs: the library file they go on to needs it.
+    #expect(lyrics.isUserPicked)
+}

@@ -51,4 +51,14 @@ extension Lyrics {
     public func markAsUserPicked(origin: LyricsUserPickOrigin) {
         idTags[.userPick] = origin.rawValue
     }
+
+    /// A copy without the mark, for text written outside LyricsX's own files.
+    /// The mark is a note about a library file; written into a track's lyrics,
+    /// it comes back as embedded lyrics that look imported, so the Local
+    /// Lyrics menu checks nothing for them.
+    public var withoutUserPickMark: Lyrics {
+        var idTags = idTags
+        idTags[.userPick] = nil
+        return Lyrics(lines: lines, idTags: idTags, metadata: metadata)
+    }
 }

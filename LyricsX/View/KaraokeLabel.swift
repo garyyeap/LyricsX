@@ -82,32 +82,51 @@ class KaraokeLabel: NSTextField {
         let attrString = NSMutableAttributedString(attributedString: attributedStringValue)
         let content = attrString.string
         let string = attrString.string as NSString
-        let shouldDrawFurigana = drawFurigana && string.dominantLanguage == "ja"
-        let shouldDrawRomajin = drawRomajin && string.dominantLanguage == "ja"
+        // English-heavy lyrics can be classified as a different language even
+        // when they contain Japanese words. Kana is explicit Japanese evidence.
+        let isJapaneseLine = string.dominantLanguage == "ja"
+        let hasJapaneseText = isJapaneseLine
+            || content.range(of: #"[\p{sc=Hiragana}\p{sc=Katakana}]"#, options: .regularExpression) != nil
+        let shouldDrawFurigana = drawFurigana && hasJapaneseText
+        let shouldDrawRomajin = drawRomajin && hasJapaneseText
         let didApplySourceFurigana = shouldDrawFurigana
             && useSourceFurigana
             && sourceFurigana.map { addSourceFurigana($0, to: attrString, content: content) } == true
-        let tokenizer = CFStringTokenizer.create(string: .from(string))
+        let tokenRanges: [NSRange]
+        if hasJapaneseText && !isJapaneseLine {
+            // A locale alone does not change the whole-line language decision.
+            // Scope tokenization to Japanese runs while retaining UTF-16 offsets.
+            let pattern = #"[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{M}ー]+"#
+            let expression = try? NSRegularExpression(pattern: pattern)
+            tokenRanges = expression?.matches(in: content, range: string.fullRange).map(\.range) ?? []
+        } else {
+            tokenRanges = [string.fullRange]
+        }
+        let locale = hasJapaneseText ? CFLocale.from(NSLocale(localeIdentifier: "ja")) : nil
         romajinAnnotations = []
-        for tokenType in IteratorSequence(tokenizer) where tokenType.contains(.isCJWordMask) {
-            if isVertical {
-                let tokenRange = tokenizer.currentTokenRange()
-                let attr: [NSAttributedString.Key: Any] = [
-                    .verticalGlyphForm: true,
-                    .baselineOffset: (font?.pointSize ?? 24) * 0.25,
-                ]
-                attrString.addAttributes(attr, range: tokenRange.asNS)
-            }
-            if shouldDrawFurigana && !didApplySourceFurigana {
-                for (furigana, range) in tokenizer.currentFuriganaAnnotations(in: string) {
-                    var attr: [CFAttributedString.Key: Any] = [.ctRubySizeFactor: 0.5]
-                    attr[.ctForegroundColor] = textColor
-                    let annotation = CTRubyAnnotation.create(furigana, attributes: attr)
-                    attrString.addAttribute(.cf(.ctRubyAnnotation), value: annotation, range: range)
+        for range in tokenRanges {
+            let tokenRange = CFRange(location: range.location, length: range.length)
+            let tokenizer = CFStringTokenizer.create(string: .from(string), range: tokenRange, locale: locale)
+            for tokenType in IteratorSequence(tokenizer) where tokenType.contains(.isCJWordMask) {
+                if isVertical {
+                    let tokenRange = tokenizer.currentTokenRange()
+                    let attr: [NSAttributedString.Key: Any] = [
+                        .verticalGlyphForm: true,
+                        .baselineOffset: (font?.pointSize ?? 24) * 0.25,
+                    ]
+                    attrString.addAttributes(attr, range: tokenRange.asNS)
                 }
-            }
-            if shouldDrawRomajin, let (romajin, range) = tokenizer.currentRomanjiAnnotation(in: string) {
-                romajinAnnotations.append((romajin as String, range))
+                if shouldDrawFurigana && !didApplySourceFurigana {
+                    for (furigana, range) in tokenizer.currentFuriganaAnnotations(in: string) {
+                        var attr: [CFAttributedString.Key: Any] = [.ctRubySizeFactor: 0.5]
+                        attr[.ctForegroundColor] = textColor
+                        let annotation = CTRubyAnnotation.create(furigana, attributes: attr)
+                        attrString.addAttribute(.cf(.ctRubyAnnotation), value: annotation, range: range)
+                    }
+                }
+                if shouldDrawRomajin, let (romajin, range) = tokenizer.currentRomanjiAnnotation(in: string) {
+                    romajinAnnotations.append((romajin as String, range))
+                }
             }
         }
         textColor?.do { attrString.addAttributes([.foregroundColor: $0], range: attrString.fullRange) }
@@ -120,18 +139,52 @@ class KaraokeLabel: NSTextField {
         to attrString: NSMutableAttributedString,
         content: String
     ) -> Bool {
-        var didApply = false
-        for attribute in sourceFurigana.attributes {
-            guard let range = content.nsRange(fromCharacterRange: attribute.range) else {
-                continue
-            }
-            var attr: [CFAttributedString.Key: Any] = [.ctRubySizeFactor: 0.5]
-            attr[.ctForegroundColor] = textColor
-            let annotation = CTRubyAnnotation.create(attribute.content as CFString, attributes: attr)
-            attrString.addAttribute(.cf(.ctRubyAnnotation), value: annotation, range: range)
-            didApply = true
+        let annotations = sourceFurigana.attributes.compactMap { attribute -> (range: NSRange, text: CFString)? in
+            guard let range = content.nsRange(fromCharacterRange: attribute.range) else { return nil }
+            return (range, attribute.content as CFString)
         }
-        return didApply
+        let style = sourceRubyStyle(for: annotations.map(\.range), in: attrString)
+        for (index, annotation) in annotations.enumerated() {
+            var attributes: [CFAttributedString.Key: Any] = [.ctRubySizeFactor: 0.5]
+            attributes[.ctForegroundColor] = textColor
+            if let style {
+                attributes[.ctFont] = style.font
+                attributes[.ctBaselineOffset] = style.offsets[index]
+            }
+            let ruby = CTRubyAnnotation.create(annotation.text, attributes: attributes)
+            attrString.addAttribute(.cf(.ctRubyAnnotation), value: ruby, range: annotation.range)
+        }
+        return !annotations.isEmpty
+    }
+
+    private func sourceRubyStyle(
+        for ranges: [NSRange], in text: NSAttributedString
+    ) -> (font: CTFont, offsets: [CGFloat])? {
+        guard !isVertical, ranges.count > 1, let font else { return nil }
+
+        // CoreText anchors each ruby to the ascent of its base run. Digits and
+        // kana/kanji can resolve to different cascade fonts on the same line.
+        let runs = CTLineCreateWithAttributedString(text).glyphRuns.map { run in
+            var ascent: CGFloat = 0
+            CTRunGetTypographicBounds(run, CFRangeMake(0, 0), &ascent, nil, nil)
+            return (range: run.stringRange.asNS, ascent: ascent)
+        }
+        let ascents = ranges.map { range in
+            runs.lazy.filter { NSIntersectionRange(range, $0.range).length > 0 }
+                .map(\.ascent).max() ?? font.ascender
+        }
+        guard let tallest = ascents.max(), let shortest = ascents.min(), tallest - shortest > 0.5 else {
+            return nil
+        }
+
+        // Use one kana-capable font for the ruby itself, independent of the
+        // fallback used by each base run. Give the tallest run a small gap,
+        // then add the missing ascent to every shorter run.
+        let sample = "あ" as CFString
+        let baseRubyFont = NSFont.systemFont(ofSize: font.pointSize * 0.5)
+        let rubyFont = CTFontCreateForStringWithLanguage(baseRubyFont as CTFont, sample, CFRangeMake(0, 1), "ja" as CFString)
+        let gap = font.pointSize * 0.1
+        return (rubyFont, ascents.map { gap + tallest - $0 })
     }
 
     private var _ctFrame: CTFrame?
@@ -203,9 +256,12 @@ class KaraokeLabel: NSTextField {
         cgContext.textMatrix = .identity
         cgContext.translateBy(x: 0, y: bounds.height)
         cgContext.scaleBy(x: 1.0, y: -1.0)
-        CTFrameDraw(ctFrame(dirtyRect), cgContext)
+        let textFrame = ctFrame(dirtyRect)
+        CTFrameDraw(textFrame, cgContext)
 
-        drawRomajiAnnotations(in: cgContext, frame: ctFrame())
+        // Paint text and romaji from one layout snapshot. Do not resolve or
+        // force a second layout after part of this draw pass is already painted.
+        drawRomajiAnnotations(in: cgContext, frame: textFrame)
     }
 
     // MARK: - Progress
@@ -228,6 +284,11 @@ class KaraokeLabel: NSTextField {
     }
 
     func setProgressAnimation(color: NSColor, progress: [(TimeInterval, Int)]) {
+        // Geometry and mask changes must be atomic. Pausing this layer also
+        // freezes implicit bounds/position animations, possibly at zero height.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         removeProgressAnimation()
         let textFrame = ctFrame()
         guard let line = textFrame.lines.first,
@@ -287,8 +348,13 @@ class KaraokeLabel: NSTextField {
             return (time, offset)
         }
         if index > 0 {
-            let progress = map[index - 1].1 + CGFloat(map[index - 1].0) * (map[index].1 - map[index - 1].1) / CGFloat(map[index].0 - map[index - 1].0)
-            map.replaceSubrange(..<index, with: [(0, progress)])
+            let previous = map[index - 1]
+            let next = map[index]
+            // Previous time is non-positive. Interpolate forward to time zero,
+            // rather than extrapolating backward into a negative layer extent.
+            let fraction = CGFloat(-previous.0 / (next.0 - previous.0))
+            let offset = (previous.1 + fraction * (next.1 - previous.1)).clamped(to: 0 ... fullExtent)
+            map.replaceSubrange(..<index, with: [(0, offset)])
         }
 
         let duration = map.last!.0
@@ -297,16 +363,19 @@ class KaraokeLabel: NSTextField {
         animation.values = map.map { $0.1 }
         animation.keyPath = isVertical ? "bounds.size.height" : "bounds.size.width"
         animation.duration = duration
+        animation.beginTime = progressLayer.convertTime(CACurrentMediaTime(), from: nil)
         progressLayer.add(animation, forKey: "inlineProgress")
     }
 
     func pauseProgressAnimation() {
+        guard progressLayer.speed != 0 else { return }
         let pausedTime = progressLayer.convertTime(CACurrentMediaTime(), from: nil)
         progressLayer.speed = 0
         progressLayer.timeOffset = pausedTime
     }
 
     func resumeProgressAnimation() {
+        guard progressLayer.speed == 0 else { return }
         let pausedTime = progressLayer.timeOffset
         progressLayer.speed = 1
         progressLayer.timeOffset = 0
@@ -320,7 +389,8 @@ class KaraokeLabel: NSTextField {
         CATransaction.setDisableActions(true)
         progressLayer.speed = 1
         progressLayer.timeOffset = 0
-        progressLayer.removeAnimation(forKey: "inlineProgress")
+        progressLayer.beginTime = 0
+        progressLayer.removeAllAnimations()
         progressLayer.frame = .zero
         CATransaction.commit()
     }
