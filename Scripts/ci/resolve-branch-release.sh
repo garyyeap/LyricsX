@@ -13,8 +13,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../release/lib.sh
-source "${HERE}/../release/lib.sh"
+# shellcheck source=lib.sh
+source "${HERE}/lib.sh"
 cd "$(repo_root)"
 
 require_env BRANCH_NAME GITHUB_SHA
@@ -26,7 +26,7 @@ fetch_channel_refs() {
 }
 
 plist_version() {
-    plist_buddy -c 'Print CFBundleShortVersionString' "$INFO_PLIST_PATH"
+    marketing_version
 }
 
 stable_base_from_plist() {
