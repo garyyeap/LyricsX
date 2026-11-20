@@ -488,7 +488,7 @@ final class AppController: NSObject {
         if defaults[.writeiTunesConvertToPlainLRC] {
             // For plain LRC export, preserve the legacy LRC formatting but still respect
             // the Chinese conversion setting for consistency with the non-plain branch.
-            var legacy = lyrics.legacyDescription
+            var legacy = lyrics.withoutUserPickMark.legacyDescription
             if let converter = ChineseConverter.shared {
                 legacy = converter.convert(legacy)
             }
@@ -1588,6 +1588,10 @@ final class AppController: NSObject {
               let lyrics = Lyrics(embeddedLyrics) else {
             return nil
         }
+        // Earlier releases wrote the user-pick mark into Music along with the
+        // lyrics. Embedded lyrics are never an import, which is what the mark
+        // tells the Local Lyrics menu on lyrics without a file.
+        lyrics.idTags[.userPick] = nil
         if lyrics.metadata.title == nil || lyrics.metadata.title?.isEmpty == true {
             lyrics.metadata.title = title
         }
