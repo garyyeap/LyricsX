@@ -12,8 +12,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../release/lib.sh
-source "${HERE}/../release/lib.sh"
+# shellcheck source=lib.sh
+source "${HERE}/lib.sh"
 
 require_env TAG_NAME RELEASE_NAME ARTIFACT_PATH PRERELEASE ROLLING_TAG GITHUB_SHA
 [ -f "$ARTIFACT_PATH" ] || die "Missing artifact: ${ARTIFACT_PATH}"
