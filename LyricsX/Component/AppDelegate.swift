@@ -333,6 +333,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenu
             guard let lyrics = AppController.shared.currentLyrics else {
                 return nil
             }
+            // Embedded lyrics have no file of their own; the track's file holds them.
+            let isEmbedded = LocalLyricsSource.onScreen(
+                localURL: lyrics.metadata.localURL,
+                service: lyrics.metadata.service,
+                isUserPicked: lyrics.isUserPicked,
+                among: [.embedded]
+            ) == .embedded
+            if isEmbedded {
+                return selectedPlayer.currentTrack?.localFileURL
+            }
             if lyrics.metadata.needsPersist {
                 lyrics.persist()
             }
