@@ -57,7 +57,10 @@ another place in the list, which lyrics sources the user switched off
 (`LyricsSourceSwitches`: every source on unless listed, a newer build's
 unknown identifiers kept), what the menu bar's lyric line shows when there is
 no line to show, how much of a line its inline time tags say is sung (the menu
-bar's karaoke progress), which standard item the status menu's custom row lines its
+bar's karaoke progress), which parts of a desktop lyrics line get Japanese
+annotations and how a word's reading spreads over its kanji
+(`JapaneseAnnotationScope`, `FuriganaAlignment`: a Chinese line that borrows
+の stays unannotated, ヶ月 keeps its furigana), which standard item the status menu's custom row lines its
 label up with and the per-release insets it falls back to, where a step of
 that row's lyrics offset lands (the next multiple of 100 ms, so an offset
 the lyrics came with, such as Kugou's 51 ms, steps back to 0), plus the lyrics
@@ -188,6 +191,16 @@ swift test --filter "LyricsDisplayLinkPolicyTests|PanelLyricsRemovalProbes"
 # dumps the full-frame test's PNGs.
 swift test --filter "NowPlayingBackdrop|ArtworkBackdrop|ArtworkGradient|ArtworkRendering"
 ```
+
+The desktop lyrics (`KaraokeLyricsView`, `KaraokeLabel`, their controller) live
+in the app target, out of reach of the package tests; only which parts of a
+line get Japanese annotations and how furigana spreads over kanji are pure
+functions in `LyricsXFoundation` (`JapaneseAnnotationTests`). After changing
+their layout, mouse handling or karaoke highlight, check by hand: among others,
+that the box stays centred while lines change with dragging on — a recording of
+the box, counted by `Scripts/count-desktop-lyrics-box-jumps.py`. The steps, and
+why the view must never use cursor rects (with dragging on, they made the box
+jump at every line change), are in `Documentations/Internal/DesktopLyrics.md`.
 
 Lyrics translation — the engine choice, System Translation's downloaded
 languages, and AI translation's setup, privacy behavior, request limits, and
@@ -568,6 +581,14 @@ a write from any other queue races one from there, so Debug builds trap on it.
 From the main thread, wrap the change and the write in
 `performOnLyricsDisplayQueue { … }`. Why it is an assertion and not a test is in
 `Documentations/ReviewDecisions.md`.
+
+Ranking lyrics writes them: `Lyrics.quality` caches its score in `metadata`
+the first time it is read, and the lyrics on screen are read on
+`DispatchQueue.lyricsDisplay` while candidates are ranked on the main thread
+(a Local Lyrics pick crashed this way). Wherever lyrics come in, call
+`cacheQualityBeforeDisplay()` before they go on screen or into the candidate
+pool. Why, and how to catch a miss with Thread Sanitizer, is in
+`Documentations/Internal/LyricsCandidatePool.md`.
 
 ### Localization
 

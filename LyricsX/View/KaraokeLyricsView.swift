@@ -20,15 +20,25 @@ class KaraokeLyricsView: NSView {
 
     @objc dynamic var isDraggable = false {
         didSet {
-            if !isDraggable, isDragging {
+            if !isDraggable, isDragging || isShowingHandCursor {
                 isDragging = false
+                isShowingHandCursor = false
                 NSCursor.arrow.set()
             }
-            window?.invalidateCursorRects(for: self)
+            // The hand cursor comes from the tracking area, not from cursor
+            // rects: rebuilding cursor rects lays the window out outside the
+            // line-change animation, so the box jumped to its new origin.
+            updateTrackingAreas()
         }
     }
 
     private var isDragging = false
+
+    /// Whether this view set the open or closed hand. The tracking area is
+    /// rebuilt at every line change and assumes the pointer inside, so the
+    /// next move with the pointer elsewhere brings an exit this view never
+    /// entered; only a hand this view set is put back to the arrow.
+    private var isShowingHandCursor = false
 
     @objc dynamic var font = NSFont.labelFont(ofSize: 24) { didSet { updateFontSize() } }
     @objc dynamic var textColor = #colorLiteral(red: 1, green: 1, blue: 1, alpha: 1)
@@ -201,16 +211,10 @@ class KaraokeLyricsView: NSView {
         return isDraggable || super.acceptsFirstMouse(for: event)
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        if isDraggable {
-            addCursorRect(bounds, cursor: isDragging ? .closedHand : .openHand)
-        }
-    }
-
     override func mouseDown(with event: NSEvent) {
         if isDraggable {
             isDragging = true
+            isShowingHandCursor = true
             NSCursor.closedHand.set()
         }
         super.mouseDown(with: event)
@@ -223,10 +227,10 @@ class KaraokeLyricsView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         isDragging = false
-        window?.invalidateCursorRects(for: self)
         if isDraggable {
             let location = convert(event.locationInWindow, from: nil)
-            (bounds.contains(location) ? NSCursor.openHand : NSCursor.arrow).set()
+            isShowingHandCursor = bounds.contains(location)
+            (isShowingHandCursor ? NSCursor.openHand : NSCursor.arrow).set()
         }
         super.mouseUp(with: event)
     }
@@ -236,7 +240,8 @@ class KaraokeLyricsView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingArea.map(removeTrackingArea)
-        if shouldHideWithMouse {
+        trackingArea = nil
+        if shouldHideWithMouse || isDraggable {
             let trackingOptions: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .assumeInside]
             trackingArea = NSTrackingArea(rect: bounds, options: trackingOptions, owner: self)
             trackingArea.map(addTrackingArea)
@@ -255,17 +260,39 @@ class KaraokeLyricsView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        if alphaValue != 0 {
+        if isDraggable {
+            showHandCursor(for: event)
+        } else if shouldHideWithMouse, alphaValue != 0 {
             animator().alphaValue = 0
         }
     }
 
     override func mouseEntered(with event: NSEvent) {
-        animator().alphaValue = 0
+        if isDraggable {
+            showHandCursor(for: event)
+        } else if shouldHideWithMouse {
+            animator().alphaValue = 0
+        }
     }
 
     override func mouseExited(with event: NSEvent) {
-        animator().alphaValue = 1
+        if isDraggable {
+            if isShowingHandCursor, !isDragging {
+                isShowingHandCursor = false
+                NSCursor.arrow.set()
+            }
+        } else {
+            animator().alphaValue = 1
+        }
+    }
+
+    /// The open hand over the lyrics, the closed one while dragging; nothing
+    /// for an event that arrives with the pointer outside, as the assumed-inside
+    /// tracking area can send.
+    private func showHandCursor(for event: NSEvent) {
+        guard isDragging || bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        isShowingHandCursor = true
+        (isDragging ? NSCursor.closedHand : NSCursor.openHand).set()
     }
 }
 
