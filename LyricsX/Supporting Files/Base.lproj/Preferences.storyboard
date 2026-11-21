@@ -1592,9 +1592,6 @@
                                     <gridRow yPlacement="fill" topPadding="5" id="new-Romajin-Row"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="es4-R9-etL"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="6GV-2W-Qb0"/>
-                                    <gridRow yPlacement="fill" topPadding="5" id="5Sc-jD-UJ4"/>
-                                    <gridRow yPlacement="fill" topPadding="5" id="convertLRC-row"/>
-                                    <gridRow yPlacement="fill" topPadding="5" id="Wah-Ax-79z"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="lhU-ZY-jGn"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="MBP-Ro-W01"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="MHL-Ro-W01"/>
@@ -1602,7 +1599,10 @@
                                     <gridRow yPlacement="fill" topPadding="5" id="AML-Ro-W01"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="ART-Ro-W01"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="HRA-Ro-W01"/>
-                                    <gridRow yPlacement="fill" height="30" topPadding="5" id="lp0-JX-wTa"/>
+                                    <gridRow yPlacement="fill" topPadding="16" id="5Sc-jD-UJ4"/>
+                                    <gridRow yPlacement="fill" topPadding="5" id="convertLRC-row"/>
+                                    <gridRow yPlacement="fill" topPadding="5" id="Wah-Ax-79z"/>
+                                    <gridRow yPlacement="fill" height="30" topPadding="16" id="lp0-JX-wTa"/>
                                     <gridRow yPlacement="fill" topPadding="5" id="AMB-Ro-W01"/>
                                 </rows>
                                 <columns>
